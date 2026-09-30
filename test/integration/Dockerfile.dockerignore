@@ -1,0 +1,4 @@
+.git
+**/__pycache__
+**/*.egg-info
+client/tests/__init__.py

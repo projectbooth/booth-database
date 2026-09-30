@@ -1,0 +1,10 @@
+apiVersion: v2
+name: booth-database
+description: >
+  Project Booth's workspace database module: one PostgreSQL database per workspace, on a bundled
+  server or an operator-supplied one, reached only through short-lived credentials minted for
+  booth-core's credential broker (ADR 0080, ADR 0081).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/projectbooth/booth-database

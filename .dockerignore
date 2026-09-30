@@ -1,0 +1,7 @@
+.git
+.github
+client
+charts
+docs
+hack
+**/*_test.go

@@ -1,0 +1,35 @@
+{{- include "booth-database.validateMode" . -}}
+# Registers booth-database with booth-core's module registry (ADR 0019, contracts/module-manifest.md).
+#
+# No UI in v0 (hasOwnUi: false): the brief places the module under Manage, but nothing in the v0
+# definition of done needs a view, and what an admin view should show (per-workspace size, drop a
+# workspace's database) is left as an open item (docs/decisions/0001 §8). Workspace databases are
+# used through the client library.
+#
+# Deliberately NO `database:` field: that asks booth-core to provision a module-internal database
+# on core's own Postgres (ADR 0053), which this module neither needs nor should use (ADR 0081).
+apiVersion: booth.projectbooth.io/v1alpha1
+kind: BoothModule
+metadata:
+  name: database
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+spec:
+  id: database
+  displayName: Database
+  icon: database
+  version: {{ .Chart.AppVersion | quote }}
+  contractVersion: "0.1.0"
+  hasOwnUi: false
+  healthCheckPath: /healthz
+  {{- if .Values.credentialBroker.enabled }}
+  # ADR 0080/0088: this module mints short-lived `postgres` credentials for the credential
+  # broker. Declaring this is what makes core deliver the
+  # booth-credential-broker-provider-credentials Secret and route postgres requests here.
+  providesCredentials:
+    kinds:
+      - postgres
+  {{- end }}
+  serviceRef:
+    name: {{ include "booth-database.fullname" . }}
+    port: {{ .Values.service.port }}

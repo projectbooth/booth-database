@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "booth-database-client"
+version = "0.1.0"
+description = "Your Project Booth workspace's PostgreSQL database in one line: booth_database.connect(), with a short-lived credential from the ADR 0080 credential broker."
+requires-python = ">=3.10"
+# psycopg is the driver connect() returns a connection from. Imported lazily, so url()/credentials()
+# and the tests work without it; SQLAlchemy is used by engine() when present, never required.
+dependencies = ["psycopg[binary]>=3.2"]
+
+[project.optional-dependencies]
+sqlalchemy = ["sqlalchemy>=2.0"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 130
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

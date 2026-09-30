@@ -1,0 +1,169 @@
+{{- if eq .Values.mode "bundled" }}
+{{- $name := include "booth-database.postgresName" . }}
+{{- $secretName := include "booth-database.adminSecretName" . }}
+# The bundled workspace-data PostgreSQL (ADR 0081): this module's OWN server, deliberately not
+# booth-core's bundled control-plane instance (ADR 0053/0054). Same shape core ratified for its
+# own (ADR 0054 §1): a small StatefulSet on the official postgres:16-alpine image, not a
+# third-party subchart.
+#
+# The admin password is generated once and kept: `lookup` reuses the existing value on upgrade,
+# and resource-policy keep leaves it behind on uninstall alongside the data PVC (which a
+# StatefulSet's volumeClaimTemplate never deletes) — a regenerated password would lock this
+# module out of its own data on reinstall.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName }}
+  {{- if and $existing $existing.data (index $existing.data "password") }}
+  password: {{ index $existing.data "password" }}
+  {{- else }}
+  password: {{ randAlphaNum 40 | b64enc }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  selector:
+    {{- include "booth-database.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "booth-database.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "booth-database.labels" . | nindent 8 }}
+        app.kubernetes.io/component: postgres
+    spec:
+      automountServiceAccountToken: false
+      # The alpine image's postgres user is uid/gid 70.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.bundled.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.bundled.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.bundled.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: postgres
+          image: {{ .Values.bundled.image }}
+          args:
+            - -c
+            - max_connections={{ .Values.bundled.maxConnections }}
+            - -c
+            - password_encryption=scram-sha-256
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.bundled.adminUser | quote }}
+            - name: POSTGRES_DB
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: password
+            # Every non-local connection (this module's admin one and every lease) must pass
+            # SCRAM; lease passwords are stored as SCRAM verifiers (internal/provision/scram.go).
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: scram-sha-256
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d postgres -h 127.0.0.1"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d postgres -h 127.0.0.1"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.bundled.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            {{- if .Values.backup.enabled }}
+            # Mounted here only so the claim binds when this pod schedules (see below); the
+            # server itself never writes to it.
+            - name: backups
+              mountPath: /backups
+              readOnly: true
+            {{- end }}
+  # `backups` is the backup CronJob's volume (templates/backup.yaml). It lives here, not as a
+  # standalone PVC in the release: `helm install --wait` waits for every release PVC to be Bound,
+  # and on a WaitForFirstConsumer storage class (k3s's and kind's default local-path) a claim only
+  # a CronJob mounts stays Pending until the first scheduled run — found by the first kind install.
+  # booth-core hit the same thing and creates its backup PVC at runtime through the Kubernetes API;
+  # this module has no API access at all, so it binds the claim through this StatefulSet instead.
+  # Like `data`, claims from a volumeClaimTemplate outlive an uninstall.
+  volumeClaimTemplates:
+    {{- if .Values.backup.enabled }}
+    - metadata:
+        name: backups
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.backup.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.backup.storage.size }}
+    {{- end }}
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.bundled.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.bundled.storage.size }}
+{{- end }}

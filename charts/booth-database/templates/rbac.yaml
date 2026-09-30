@@ -1,0 +1,37 @@
+{{- if include "booth-database.pinToNode" . }}
+{{- $sts := include "booth-database.postgresName" . }}
+# ADR 0090: the module's only Kubernetes API access — reading which node the bundled server's pod
+# landed on and pinning its StatefulSet there (internal/nodepin). Namespaced Role, resourceNames
+# pinned to exactly those two objects; no ClusterRole, nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "booth-database.fullname" . }}-nodepin
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    resourceNames: [{{ $sts | quote }}]
+    verbs: ["get", "patch"]
+  # The pod is read only for spec.nodeName; the StatefulSet alone can't say where it landed.
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: [{{ printf "%s-0" $sts | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "booth-database.fullname" . }}-nodepin
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "booth-database.fullname" . }}-nodepin
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "booth-database.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

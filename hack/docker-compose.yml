@@ -1,0 +1,17 @@
+# The real PostgreSQL the test suite runs against (unit/contract layer, and the client's
+# end-to-end test). Same image the chart bundles. Usage:
+#   docker compose -f hack/docker-compose.yml up -d --wait
+#   eval "$(sh hack/test-env.sh)"
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: booth_admin
+      POSTGRES_PASSWORD: booth-admin-test
+      POSTGRES_DB: postgres
+    ports: ["15442:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U booth_admin -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

@@ -1,0 +1,83 @@
+{{- if and (eq .Values.mode "bundled") .Values.backup.enabled }}
+{{- $name := printf "%s-backup" (include "booth-database.fullname" .) | trunc 63 | trimSuffix "-" }}
+# Scheduled backup of the bundled server's workspace databases (bundled mode only — an external
+# cluster's backups are its operator's responsibility, ADR 0054 §3). Script: files/backup.sh.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+data:
+  backup.sh: |
+    {{- .Files.Get "files/backup.sh" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "booth-database.labels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              # Same image as the server, so pg_dump's major version always matches it.
+              image: {{ .Values.bundled.image }}
+              command: ["sh", "/scripts/backup.sh"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: PGHOST
+                  value: {{ include "booth-database.postgresName" . }}
+                - name: PGUSER
+                  value: {{ .Values.bundled.adminUser | quote }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "booth-database.adminSecretName" . }}
+                      key: password
+                - name: BACKUP_DIR
+                  value: /backups
+                - name: RETENTION_DAYS
+                  value: {{ .Values.backup.retentionDays | quote }}
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: scripts
+              configMap:
+                name: {{ $name }}
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ printf "backups-%s-0" (include "booth-database.postgresName" .) }}
+{{- end }}

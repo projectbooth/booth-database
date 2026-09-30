@@ -1,0 +1,138 @@
+# Default values for booth-database.
+#
+# What this module is (ADR 0081): an optional, workspace-scoped PostgreSQL — one database per
+# workspace, created on that workspace's first credential request — for a workspace's own code
+# (pipeline tasks, notebooks) to read and write. NOT booth-core's bundled control-plane Postgres
+# (ADR 0053/0054), which holds each *module's* small internal state; this chart never touches that
+# instance and never declares the manifest's `database` field.
+#
+# The only way in is a short-lived credential minted through booth-core's credential broker
+# (ADR 0080/0088): `POST /api/credentials {kind: "postgres", ...}` — or, from code,
+# `booth_database.connect()` (client/). Nobody is ever handed a long-lived password.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/projectbooth/booth-database
+  tag: "" # defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+# "bundled": this chart runs its own PostgreSQL StatefulSet (below), distinct from booth-core's.
+# "external": point at a PostgreSQL-compatible cluster you run yourself (`external:` below).
+mode: bundled
+
+bundled:
+  image: postgres:16-alpine
+  # The admin role this module uses to create workspace databases and mint lease roles. Its
+  # password is generated on first install into the Secret <release>-booth-database-postgres-admin
+  # and kept across upgrades AND uninstall (helm.sh/resource-policy: keep) — the data volume
+  # outlives an uninstall too, and a regenerated password wouldn't match it.
+  adminUser: booth_admin
+  storage:
+    size: 10Gi
+    storageClassName: "" # empty = the cluster default (local-path on k3s)
+  # Server-wide connection ceiling. Every lease role is additionally capped at
+  # leases.connectionLimit connections of its own.
+  maxConnections: 200
+  resources: {}
+  # ADR 0090 (ADR 0083's fix, duplicated from booth-core): once the server's pod has been scheduled,
+  # the module patches this StatefulSet's nodeSelector to `kubernetes.io/hostname: <that node>`, so
+  # a reschedule can never strand it away from a node-local (k3s local-path) data volume. Needs a
+  # Role granting get on the one pod and get/patch on the one StatefulSet, in this namespace only
+  # (templates/rbac.yaml), and mounts a service-account token into the module pod for it. Turn off
+  # only with network-attached storage, where pinning would just stop the pod from failing over.
+  pinToNode: true
+  # Scheduling passthroughs. The pin above adds its hostname entry alongside these, not instead.
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+
+external:
+  host: ""
+  port: 5432
+  # Maintenance database the admin role connects to.
+  database: postgres
+  # A role with CREATEDB and CREATEROLE (and membership in pg_signal_backend, so the reaper can
+  # end expired sessions). A superuser works; see README.md for the least-privilege setup.
+  username: ""
+  passwordSecret:
+    name: "" # required in external mode
+    key: password
+  sslMode: require
+  # ADR 0054 §2 precedent: revoking PUBLIC's default CONNECT on postgres/template1 is opt-in on
+  # a cluster this module doesn't own. Left off, an issued workspace credential can open a
+  # session on those maintenance databases and read server-wide catalogs (database and role
+  # names — never another workspace's data); the module logs a warning at startup.
+  restrictMaintenanceAccess: false
+
+# What an issued credential tells a workload to connect to. Empty = the bundled Service's
+# in-cluster DNS name (bundled) or external.host/port/sslMode (external). Set these when
+# workload pods reach the server at a different address than this module does.
+client:
+  host: ""
+  port: 0
+  sslMode: ""
+
+leases:
+  # Hard cap on a lease's lifetime, independent of (and normally equal to) the broker's own
+  # 5-minute ceiling (ADR 0088). A new login is refused by PostgreSQL itself past expiry.
+  maxTTL: 5m
+  # How often expired leases are reaped: open sessions terminated, roles dropped. The
+  # worst-case time a connection opened before expiry can keep running after it.
+  reapInterval: 10s
+  # CONNECTION LIMIT on each lease role.
+  connectionLimit: 10
+
+# ADR 0080/0088: declares `providesCredentials: {kinds: ["postgres"]}` on the manifest, which is
+# what makes booth-core deliver booth-credential-broker-provider-credentials and route `postgres`
+# requests here. On by default — unlike booth-storage's s3 provider (a secondary capability
+# there), the broker is this module's *only* access path, so off means installed but unusable.
+credentialBroker:
+  enabled: true
+
+# Defense in depth beneath credential auth: a NetworkPolicy on the bundled server admitting only
+# this module's own pod, its backup Job, and namespaces labelled with clientNamespaceLabel — the
+# same label booth-core's bundled Postgres admits and that core already applies to the namespace of
+# every module declaring `database` (booth-notebooks and booth-pipeline among them), so the workload
+# namespaces that use this database are admitted with no extra step. Any other namespace needs the
+# label added by hand. Enforced only by a CNI that implements NetworkPolicy (k3s's default does).
+# NOTE: this is ingress only; a client pod's *own* egress policy must also allow port 5432 here.
+networkPolicy:
+  enabled: true
+  clientNamespaceLabel:
+    key: booth.projectbooth.io/database-client
+    value: "true"
+
+# Scheduled pg_dump of every workspace database, bundled mode only (an external cluster's backups
+# are its operator's own responsibility — ADR 0054 §3's split, applied here). Mirrors ADR 0054's
+# v0 baseline: a CronJob writing to a PVC; not point-in-time recovery. Restore runbook: README.md.
+backup:
+  enabled: true
+  schedule: "17 3 * * *"
+  retentionDays: 7
+  storage:
+    size: 20Gi
+    storageClassName: ""
+  resources: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+resources: {}
+
+serviceAccount:
+  create: true
+  name: ""

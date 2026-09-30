@@ -1,0 +1,132 @@
+{{- include "booth-database.validateMode" . -}}
+{{- $bundled := eq .Values.mode "bundled" -}}
+{{- if not $bundled }}
+{{- $_ := required "external.host is required when mode=external" .Values.external.host -}}
+{{- $_ := required "external.username is required when mode=external" .Values.external.username -}}
+{{- $_ := required "external.passwordSecret.name is required when mode=external: name a Secret holding the admin role's password" .Values.external.passwordSecret.name -}}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "booth-database.fullname" . }}
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "booth-database.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "booth-database.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: {{ include "booth-database.serviceAccountName" . }}
+      # A token only when node pinning needs one (its Role is get on one pod and get/patch on one
+      # StatefulSet — templates/rbac.yaml); otherwise this pod never talks to the Kubernetes API.
+      automountServiceAccountToken: {{ include "booth-database.pinToNode" . | eq "true" }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: booth-database
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: BOOTH_HTTP_ADDR
+              value: ":8080"
+            - name: BOOTH_DATABASE_MODE
+              value: {{ .Values.mode | quote }}
+            {{- if $bundled }}
+            - name: BOOTH_DATABASE_ADMIN_HOST
+              value: {{ include "booth-database.postgresName" . }}
+            - name: BOOTH_DATABASE_ADMIN_PORT
+              value: "5432"
+            - name: BOOTH_DATABASE_ADMIN_DBNAME
+              value: postgres
+            - name: BOOTH_DATABASE_ADMIN_USER
+              value: {{ .Values.bundled.adminUser | quote }}
+            - name: BOOTH_DATABASE_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "booth-database.adminSecretName" . }}
+                  key: password
+            # The bundled server has no TLS: in-cluster traffic only (docs/decisions/0001 §6).
+            - name: BOOTH_DATABASE_ADMIN_SSLMODE
+              value: disable
+            - name: BOOTH_DATABASE_CLIENT_HOST
+              value: {{ .Values.client.host | default (printf "%s.%s.svc.cluster.local" (include "booth-database.postgresName" .) .Release.Namespace) | quote }}
+            {{- else }}
+            - name: BOOTH_DATABASE_ADMIN_HOST
+              value: {{ .Values.external.host | quote }}
+            - name: BOOTH_DATABASE_ADMIN_PORT
+              value: {{ .Values.external.port | quote }}
+            - name: BOOTH_DATABASE_ADMIN_DBNAME
+              value: {{ .Values.external.database | quote }}
+            - name: BOOTH_DATABASE_ADMIN_USER
+              value: {{ .Values.external.username | quote }}
+            - name: BOOTH_DATABASE_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.external.passwordSecret.name }}
+                  key: {{ .Values.external.passwordSecret.key }}
+            - name: BOOTH_DATABASE_ADMIN_SSLMODE
+              value: {{ .Values.external.sslMode | quote }}
+            - name: BOOTH_DATABASE_RESTRICT_MAINTENANCE_ACCESS
+              value: {{ .Values.external.restrictMaintenanceAccess | quote }}
+            {{- with .Values.client.host }}
+            - name: BOOTH_DATABASE_CLIENT_HOST
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.client.port }}
+            - name: BOOTH_DATABASE_CLIENT_PORT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.client.sslMode }}
+            - name: BOOTH_DATABASE_CLIENT_SSLMODE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if include "booth-database.pinToNode" . }}
+            - name: BOOTH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: BOOTH_DATABASE_PIN_STATEFULSET
+              value: {{ include "booth-database.postgresName" . }}
+            {{- end }}
+            - name: BOOTH_DATABASE_MAX_TTL
+              value: {{ .Values.leases.maxTTL | quote }}
+            - name: BOOTH_DATABASE_REAP_INTERVAL
+              value: {{ .Values.leases.reapInterval | quote }}
+            - name: BOOTH_DATABASE_LEASE_CONNECTION_LIMIT
+              value: {{ .Values.leases.connectionLimit | quote }}
+            {{- if .Values.credentialBroker.enabled }}
+            # ADR 0080/0088: core presents this same value as `Authorization: Bearer` on every
+            # call to POST /internal/credentials. The pod may sit in CreateContainerConfigError
+            # for a moment after install until core has written this Secret.
+            - name: BOOTH_CREDENTIAL_BROKER_CREDENTIAL
+              valueFrom:
+                secretKeyRef:
+                  name: booth-credential-broker-provider-credentials
+                  key: credential
+            {{- end }}
+          # /livez never touches PostgreSQL (a restart can't fix an outage); /healthz does, and
+          # is what core polls.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

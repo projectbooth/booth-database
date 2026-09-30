@@ -1,0 +1,39 @@
+{{- if and (eq .Values.mode "bundled") .Values.networkPolicy.enabled }}
+# Defense in depth beneath credential auth, the same pattern as booth-core's bundled Postgres
+# (its networkpolicy-postgresql.yaml): only these can reach the bundled server's port at all —
+#   - this module's own pod (the admin connection),
+#   - the backup Job (it dumps over the network),
+#   - namespaces labelled booth.projectbooth.io/database-client=true, which booth-core applies to the
+#     namespace of every module declaring `database` — including the notebook and pipeline modules
+#     whose workloads are this database's real clients.
+# Ingress only: a client pod's own egress policy must also permit it (see docs/decisions/0002).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "booth-database.postgresName" . }}
+  labels:
+    {{- include "booth-database.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "booth-database.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 5432
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "booth-database.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: api
+        - podSelector:
+            matchLabels:
+              {{- include "booth-database.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: backup
+        - namespaceSelector:
+            matchLabels:
+              {{ .Values.networkPolicy.clientNamespaceLabel.key }}: {{ .Values.networkPolicy.clientNamespaceLabel.value | quote }}
+{{- end }}
