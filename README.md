@@ -17,7 +17,7 @@ df.to_sql("notes_copy", booth_database.engine())           # SQLAlchemy; renews 
 ```
 
 Each call asks booth-core's credential broker (ADR 0080/0088) for a `postgres` credential good for a
-few minutes, for this workspace's database only, as the caller's own identity. This module is the
+short time (one hour by default: booth-database's lease floor, ADR 0089), for this workspace's database only, as the caller's own identity. This module is the
 broker's `postgres`-kind **provider**: it mints a fresh short-lived login role per request and never
 hands out its own admin credential. Design, trade-offs and open items:
 [`docs/decisions/0001-first-pass-design.md`](docs/decisions/0001-first-pass-design.md).
@@ -77,9 +77,15 @@ POST <core>/api/credentials   Authorization: Bearer <token>   X-Workspace: <slug
 
 `scope.workspace` is optional and must match the request's workspace. Any other scope field, or any
 `options`, is refused with 422 `scope_not_supported` rather than ignored. `readwrite` needs
-editor/owner (core's rule). A credential stops authenticating at `expiresAt`, and any session still
-open on it is ended within `leases.reapInterval` (default 10s). So **no single session lasts longer
-than the credential's TTL (≤ 5 minutes)**; see docs/decisions/0001 §3.
+editor/owner (core's rule).
+
+**Lifetime.** The broker caps what a caller may *ask* for at 5 minutes (ADR 0088), and this provider
+clamps every shorter request **up to its floor, `leases.minTTL` (default 1 hour)**. That's the same
+mechanism booth-storage uses for MinIO's 15-minute floor (ADR 0089 §3). `expiresAt` in the response
+is always the real expiry. A credential stops authenticating at `expiresAt`, and any session still
+open on it is ended within `leases.reapInterval` (default 10s). So **no single session outlives its
+credential (one hour by default)**: longer work should open new connections, which `engine()`
+does for you. Why one hour: docs/decisions/0003.
 
 ## Backup and restore (bundled mode)
 

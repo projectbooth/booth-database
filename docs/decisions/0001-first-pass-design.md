@@ -84,6 +84,9 @@ semantics), (b) a longer postgres-kind TTL ceiling in core, (c) a provider-side
 `options.sessionGrace`. **I'd recommend (a) or (b) be decided explicitly, not discovered by a
 pipeline author.**
 
+**Resolved (ADR 0089 §3, built in 0003):** neither (a) nor (b). The provider clamps every lease up to
+its own one-hour floor, so sessions can run up to an hour, with enforcement unchanged.
+
 ## §4 Judgment call: provisioning is lazy, on a workspace's first credential request
 
 No workspace-lifecycle event or listing exists for a module to act on (workspaces are just ADR 0025
@@ -162,8 +165,8 @@ privileged route is authenticated by core's provider credential. An obvious late
 - **The client never caches a credential.** A fresh one per `connect()` gives each connection the
   longest possible life under §3's expiry model, and leaves no stale secret in memory.
 - **Default access is read-write**; a viewer gets a clear "use read_only=True" error from the 403.
-- **Provider-side TTL cap** (`leases.maxTTL`, 5m) mirrors the broker's ceiling as defence in depth.
-  No provider floor: PostgreSQL can honor any TTL down to a second, so it does.
+- ~~Provider-side TTL cap of 5m, no provider floor.~~ **Superseded by 0003**: a one-hour floor
+  (`leases.minTTL`), with the cap defaulting to it.
 - **Bundled admin Secret is `lookup`-preserved and `resource-policy: keep`** (verified across a real
   `helm upgrade`), because the data PVC outlives an uninstall and a regenerated password would lock
   the module out of its own data.

@@ -159,29 +159,45 @@ func TestSuccess_ResponseShape(t *testing.T) {
 	if len(f.calls) != 1 {
 		t.Fatalf("issuer called %d times", len(f.calls))
 	}
-	if c := f.calls[0]; c.ws != "acme" || c.leaseID != testLeaseID || !c.readWrite || c.ttl != 5*time.Minute {
+	// The broker's ceiling-sized 300s request is clamped UP to the provider's one-hour floor.
+	if c := f.calls[0]; c.ws != "acme" || c.leaseID != testLeaseID || !c.readWrite || c.ttl != DefaultMinTTL {
 		t.Errorf("issuer called with %+v", c)
 	}
 }
 
-func TestAccessAndTTLPassThrough(t *testing.T) {
+func TestAccessAndTTLClamping(t *testing.T) {
 	cases := []struct {
 		name      string
+		deps      Deps // only MinTTL/MaxTTL are read
 		overrides map[string]any
 		readWrite bool
 		ttl       time.Duration
 	}{
-		{"read", map[string]any{"access": "read"}, false, 5 * time.Minute},
-		{"short ttl honoured exactly", map[string]any{"ttlSeconds": 30}, true, 30 * time.Second},
-		{"over the provider's own cap is clamped", map[string]any{"ttlSeconds": 3600}, true, 5 * time.Minute},
-		{"absent ttl gets the cap", map[string]any{"ttlSeconds": nil}, true, 5 * time.Minute},
-		{"scope may omit workspace", map[string]any{"scope": map[string]any{}}, true, 5 * time.Minute},
-		{"empty options are fine", map[string]any{"options": map[string]any{}}, true, 5 * time.Minute},
+		// Defaults: floor 1h, cap = floor, so every lease is exactly one hour.
+		{"read", Deps{}, map[string]any{"access": "read"}, false, time.Hour},
+		{"broker ceiling clamped up to the floor", Deps{}, map[string]any{"ttlSeconds": 300}, true, time.Hour},
+		{"short request clamped up to the floor", Deps{}, map[string]any{"ttlSeconds": 30}, true, time.Hour},
+		{"absent ttl gets the floor", Deps{}, map[string]any{"ttlSeconds": nil}, true, time.Hour},
+		{"over the cap clamped down", Deps{}, map[string]any{"ttlSeconds": 86400}, true, time.Hour},
+		{"scope may omit workspace", Deps{}, map[string]any{"scope": map[string]any{}}, true, time.Hour},
+		{"empty options are fine", Deps{}, map[string]any{"options": map[string]any{}}, true, time.Hour},
+		// Operator-configured floor/cap window.
+		{"between floor and cap honoured exactly", Deps{MinTTL: 10 * time.Minute, MaxTTL: 2 * time.Hour}, map[string]any{"ttlSeconds": 1800}, true, 30 * time.Minute},
+		{"below a configured floor", Deps{MinTTL: 10 * time.Minute, MaxTTL: 2 * time.Hour}, map[string]any{"ttlSeconds": 60}, true, 10 * time.Minute},
+		{"above a configured cap", Deps{MinTTL: 10 * time.Minute, MaxTTL: 2 * time.Hour}, map[string]any{"ttlSeconds": 86400}, true, 2 * time.Hour},
+		// A cap misconfigured below the floor can't undercut it.
+		{"cap below floor is raised", Deps{MinTTL: time.Hour, MaxTTL: time.Minute}, map[string]any{"ttlSeconds": 300}, true, time.Hour},
+		// Tests elsewhere use a tiny floor to exercise real expiry; it must be honoured.
+		{"tiny test floor", Deps{MinTTL: time.Second, MaxTTL: time.Hour}, map[string]any{"ttlSeconds": 2}, true, 2 * time.Second},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeIssuer{}
-			rec := do(t, newTestHandler(f, testCredential), testCredential, validBody(tc.overrides))
+			h := NewHandler(Deps{
+				Credential: testCredential, Issuer: f, MinTTL: tc.deps.MinTTL, MaxTTL: tc.deps.MaxTTL,
+				NewLeaseID: func() string { return testLeaseID },
+			})
+			rec := do(t, h, testCredential, validBody(tc.overrides))
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("status %d: %s", rec.Code, rec.Body)
 			}

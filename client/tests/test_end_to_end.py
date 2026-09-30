@@ -64,9 +64,16 @@ def stack(tmp_path_factory):
         "BOOTH_DATABASE_ADMIN_SSLMODE": "disable",
         "BOOTH_DATABASE_RESTRICT_MAINTENANCE_ACCESS": "true",
         "BOOTH_DATABASE_REAP_INTERVAL": "1s",
+        # The production floor is 1h (docs/decisions/0003); lowered so expiry is testable in seconds.
+        "BOOTH_DATABASE_MIN_TTL": "1s",
+        "BOOTH_DATABASE_MAX_TTL": "1h",  # the cap defaults to the floor; keep requested TTLs honoured
         "BOOTH_CREDENTIAL_BROKER_CREDENTIAL": PROVIDER_CREDENTIAL,
     }
-    proc = subprocess.Popen([str(binary)], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    # Output goes to a file, never a PIPE: nothing drains a pipe until teardown, so once the audit
+    # lines filled the OS pipe buffer the provider's log.Printf blocked and requests hung.
+    log_path = tmp_path_factory.mktemp("log") / "provider.log"
+    log_file = open(log_path, "wb")  # noqa: SIM115 - held open across the fixture's yield, closed in teardown
+    proc = subprocess.Popen([str(binary)], env=env, stdout=log_file, stderr=subprocess.STDOUT)
     provider = f"http://127.0.0.1:{port}"
     deadline = time.time() + 30
     while True:
@@ -94,8 +101,9 @@ def stack(tmp_path_factory):
     yield {"core": core, "ws_a": ws_a, "ws_b": ws_b, "proc": proc}
     core.close()
     proc.terminate()
-    out, _ = proc.communicate(timeout=10)
-    log = out.decode(errors="replace")
+    proc.wait(timeout=10)
+    log_file.close()
+    log = log_path.read_text(errors="replace")
     # The provider's own audit lines must never contain an issued password (ADR 0080).
     for g in _issued:
         assert g not in log, "an issued password appeared in the provider's log"
@@ -180,3 +188,28 @@ def test_engine_with_pandas_style_usage(stack):
     with eng.connect() as conn:
         assert conn.execute(sqlalchemy.text("SELECT count(*) FROM via_engine")).scalar() >= 1
     eng.dispose()
+
+
+def test_engine_reuses_until_near_expiry(stack):
+    """engine() keys recycling on each grant's real expiry: a connection with plenty of life left
+    is reused across checkouts (no new lease per checkout), one within a minute of expiry is
+    replaced with a fresh credential. (This stack's floor is lowered to 1s, so the requested ttl
+    is what's granted.)"""
+    sqlalchemy = pytest.importorskip("sqlalchemy")
+
+    def lease_users(d, checkouts, pause=0.0):
+        eng = d.engine()
+        users = []
+        for _ in range(checkouts):
+            with eng.connect() as conn:
+                users.append(conn.execute(sqlalchemy.text("SELECT session_user")).scalar())
+            time.sleep(pause)
+        eng.dispose()
+        return users
+
+    long_lived = lease_users(database(stack, "editor-a", stack["ws_a"], ttl=300), 3)
+    assert len(set(long_lived)) == 1, long_lived
+
+    # A 62s grant has < 60s left after 3s: the second checkout must get a new lease.
+    short = lease_users(database(stack, "editor-a", stack["ws_a"], ttl=62), 2, pause=3)
+    assert len(set(short)) == 2, short

@@ -66,20 +66,38 @@ type Deps struct {
 	Credential string
 	Issuer     Issuer
 	Endpoint   Endpoint
-	// MaxTTL caps a lease's lifetime independently of the broker's own ceiling (ADR 0088's
-	// 5-minute DefaultMaxTTL) — defense in depth if core is ever configured looser. <= 0 means
-	// 5 minutes.
+	// MinTTL is this provider's documented floor on a lease's lifetime (ADR 0089 §3): a request
+	// asking for less — which, under the broker's 5-minute ceiling (ADR 0088), is every request —
+	// is clamped UP to it. Same mechanism as booth-storage's MinIO provider (a 15-minute floor it
+	// can't go below); here the floor is a usability limit rather than a technical one, because a
+	// session dies when its credential expires (the reaper) and five minutes is shorter than a
+	// real pipeline task or notebook work block. Response.ExpiresAt carries the real expiry, so
+	// booth-core's audit trail records what was actually issued. <= 0 means DefaultMinTTL.
+	MinTTL time.Duration
+	// MaxTTL caps a lease's lifetime on this side, independently of the broker's ceiling —
+	// defense in depth if core is ever configured looser. <= 0 means MinTTL (i.e. every lease
+	// lives exactly the floor); a value below MinTTL is raised to it.
 	MaxTTL time.Duration
 	// NewLeaseID is overridden in tests.
 	NewLeaseID func() string
 }
 
+// DefaultMinTTL is the lease-lifetime floor (docs/decisions/0003 for the reasoning): one hour —
+// booth-pipeline's default task timeout (DEFAULT_TIMEOUT_SECONDS = 3600) and booth-notebooks'
+// default idle-cull window (cullIdleSeconds: 3600), so a default-configured task can hold one
+// connection for its whole run and a notebook connection lasts as long as the server it lives in
+// would stay up idle.
+const DefaultMinTTL = time.Hour
+
 // NewHandler builds the provider endpoint. Not behind any OIDC middleware: the only caller is
 // booth-core, authenticated by the shared provider credential, and it never comes through the
 // gateway.
 func NewHandler(deps Deps) http.Handler {
-	if deps.MaxTTL <= 0 {
-		deps.MaxTTL = 5 * time.Minute
+	if deps.MinTTL <= 0 {
+		deps.MinTTL = DefaultMinTTL
+	}
+	if deps.MaxTTL < deps.MinTTL {
+		deps.MaxTTL = deps.MinTTL
 	}
 	if deps.NewLeaseID == nil {
 		deps.NewLeaseID = uuid.NewString
@@ -208,8 +226,11 @@ func (p *provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ttl := time.Duration(req.TTLSeconds) * time.Second
-	if ttl <= 0 || ttl > p.MaxTTL {
+	if ttl > p.MaxTTL {
 		ttl = p.MaxTTL
+	}
+	if ttl < p.MinTTL { // also covers an absent/zero ttlSeconds
+		ttl = p.MinTTL
 	}
 
 	leaseID := p.NewLeaseID()

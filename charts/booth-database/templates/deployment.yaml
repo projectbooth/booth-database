@@ -102,8 +102,12 @@ spec:
             - name: BOOTH_DATABASE_PIN_STATEFULSET
               value: {{ include "booth-database.postgresName" . }}
             {{- end }}
+            - name: BOOTH_DATABASE_MIN_TTL
+              value: {{ .Values.leases.minTTL | quote }}
+            {{- with .Values.leases.maxTTL }}
             - name: BOOTH_DATABASE_MAX_TTL
-              value: {{ .Values.leases.maxTTL | quote }}
+              value: {{ . | quote }}
+            {{- end }}
             - name: BOOTH_DATABASE_REAP_INTERVAL
               value: {{ .Values.leases.reapInterval | quote }}
             - name: BOOTH_DATABASE_LEASE_CONNECTION_LIMIT

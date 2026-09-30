@@ -101,6 +101,7 @@ func run() error {
 				Credential: cfg.CredentialBrokerCredential,
 				Issuer:     prov,
 				Endpoint:   credentialbroker.Endpoint{Host: cfg.ClientHost, Port: cfg.ClientPort, SSLMode: cfg.ClientSSLMode},
+				MinTTL:     cfg.MinTTL,
 				MaxTTL:     cfg.MaxTTL,
 			}),
 		}),

@@ -77,9 +77,17 @@ client:
   sslMode: ""
 
 leases:
-  # Hard cap on a lease's lifetime, independent of (and normally equal to) the broker's own
-  # 5-minute ceiling (ADR 0088). A new login is refused by PostgreSQL itself past expiry.
-  maxTTL: 5m
+  # Floor on a lease's lifetime (ADR 0089 §3). The broker caps what a caller may *ask* for at
+  # 5 minutes (ADR 0088); this provider clamps every shorter request UP to this floor, the same
+  # mechanism booth-storage uses for MinIO's 15-minute floor. It matters because a session ends
+  # when its credential expires (PostgreSQL refuses new logins; the reaper ends open sessions), so
+  # this is also the longest any one connection can live. One hour = booth-pipeline's default task
+  # timeout and booth-notebooks' default idle-cull window (docs/decisions/0003). It is also how
+  # long a leaked credential stays usable, so raise it deliberately, not casually.
+  minTTL: 1h
+  # Cap on a lease's lifetime on this side. Empty = the floor, i.e. every lease lives exactly
+  # minTTL. Only matters if booth-core's broker ceiling is ever raised above the floor.
+  maxTTL: ""
   # How often expired leases are reaped: open sessions terminated, roles dropped. The
   # worst-case time a connection opened before expiry can keep running after it.
   reapInterval: 10s

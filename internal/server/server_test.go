@@ -84,7 +84,8 @@ func TestProviderPath_RealPostgres(t *testing.T) {
 
 	ws := fmt.Sprintf("e2e-%d", time.Now().UnixNano())
 	body, _ := json.Marshal(map[string]any{
-		"kind": "postgres", "ttlSeconds": 60, "access": "readwrite",
+		// What core actually sends: its 5-minute ceiling (ADR 0088). The provider floor lifts it.
+		"kind": "postgres", "ttlSeconds": 300, "access": "readwrite",
 		"scope":     map[string]any{"workspace": ws},
 		"requester": map[string]any{"subject": "user-1", "workspace": ws, "role": "editor"},
 	})
@@ -113,8 +114,22 @@ func TestProviderPath_RealPostgres(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
-	if d := time.Until(out.ExpiresAt); d <= 0 || d > 61*time.Second {
-		t.Errorf("expiresAt %v is not ~60s out", out.ExpiresAt)
+	// ADR 0089 §3: clamped up to the one-hour floor, and the response tells the truth about it.
+	if d := time.Until(out.ExpiresAt); d < 59*time.Minute || d > 61*time.Minute {
+		t.Errorf("expiresAt %v is not ~1h out (the provider floor)", out.ExpiresAt)
+	}
+	// ...and PostgreSQL enforces exactly that expiry, not the 5 minutes the request asked for.
+	admin, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(ctx)
+	var validUntil time.Time
+	if err := admin.QueryRow(ctx, "SELECT rolvaliduntil FROM pg_roles WHERE rolname = $1", out.Credential.Username).Scan(&validUntil); err != nil {
+		t.Fatal(err)
+	}
+	if diff := validUntil.Sub(out.ExpiresAt); diff < -time.Second || diff > time.Second {
+		t.Errorf("rolvaliduntil %v != response expiresAt %v", validUntil, out.ExpiresAt)
 	}
 
 	c := out.Credential
