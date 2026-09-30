@@ -58,14 +58,14 @@ type harness struct {
 	src *fakeSource
 }
 
-func newHarness(t *testing.T, src *fakeSource, operators ...string) harness {
+func newHarness(t *testing.T, src *fakeSource) harness {
 	t.Helper()
 	idp := authtest.New(t)
 	v, err := auth.NewVerifier(context.Background(), auth.OIDCConfig{IssuerURL: idp.URL, ClientID: "booth-database"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := api.NewHandler(api.Deps{Verifier: func() auth.TokenVerifier { return v }, Source: src, OperatorWorkspaces: operators})
+	h := api.NewHandler(api.Deps{Verifier: func() auth.TokenVerifier { return v }, Source: src})
 	return harness{idp, h, src}
 }
 
@@ -135,21 +135,37 @@ func TestStatus_OnlyTheActiveWorkspace(t *testing.T) {
 
 func TestDatabases_OperatorOnly(t *testing.T) {
 	src := &fakeSource{list: []provision.Status{{Database: dbName(t, "acme")}, {Database: dbName(t, "globex")}, {Database: dbName(t, "initech")}}}
-	hs := newHarness(t, src, "platform")
+	hs := newHarness(t, src)
 
-	// An ordinary owner can't list, and the listing isn't even read.
-	rec, _ := hs.get(t, "/api/databases", "acme", []string{"/workspaces/acme/owner"}, "")
-	if rec.Code != 403 || src.listCalls != 0 {
-		t.Fatalf("non-operator owner: %d (list read %d times)", rec.Code, src.listCalls)
-	}
-	// Neither can a non-owner of the operator workspace.
-	rec, _ = hs.get(t, "/api/databases", "platform", []string{"/workspaces/platform/editor"}, "")
-	if rec.Code != 403 {
-		t.Fatalf("operator-workspace editor: %d", rec.Code)
+	// ADR 0094: only the exact /platform/operator claim counts, on top of owning the active
+	// workspace (ADR 0093 scoping unchanged). Everything else fails closed, and the listing
+	// isn't even read.
+	for _, tc := range []struct {
+		name   string
+		groups []string
+	}{
+		{"ordinary owner", []string{"/workspaces/acme/owner"}},
+		// The old stopgap's shape — owning a workspace called "platform" — grants nothing now.
+		{"owner of a workspace named platform", []string{"/workspaces/platform/owner"}},
+		{"operator claim but only an editor here", []string{"/workspaces/acme/editor", "/platform/operator"}},
+		{"near-miss claims", []string{"/workspaces/acme/owner", "/platform/operator/", "/Platform/Operator", "/platform/operators", "platform/operator", "/platform/admin"}},
+		{"operator claim for a workspace called platform", []string{"/workspaces/acme/owner", "/workspaces/platform/operator"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src.listCalls = 0
+			rec, st := hs.get(t, "/api/databases", "acme", tc.groups, "")
+			if rec.Code != 403 || src.listCalls != 0 {
+				t.Fatalf("status %d (list read %d times), want 403 unread", rec.Code, src.listCalls)
+			}
+			if _, st = hs.get(t, "/api/status", "acme", tc.groups, ""); st != nil && st["operator"] == true {
+				t.Error("/api/status reported operator")
+			}
+		})
 	}
 
-	// An operator owner can; slugs appear only for workspaces the caller belongs to.
-	groups := []string{"/workspaces/platform/owner", "/workspaces/acme/viewer"}
+	// A platform operator who owns the active workspace can; slugs appear only for workspaces the
+	// caller belongs to.
+	groups := []string{"/workspaces/platform/owner", "/workspaces/acme/viewer", auth.PlatformOperatorGroup}
 	rec, body := hs.get(t, "/api/databases", "platform", groups, "")
 	if rec.Code != 200 {
 		t.Fatalf("operator: %d %s", rec.Code, rec.Body)
@@ -192,7 +208,7 @@ func TestNoVerifierMeansUnavailable(t *testing.T) {
 }
 
 func TestReadOnlyRoutes(t *testing.T) {
-	hs := newHarness(t, &fakeSource{}, "platform")
+	hs := newHarness(t, &fakeSource{})
 	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodPut} {
 		for _, path := range []string{"/api/status", "/api/databases"} {
 			req := httptest.NewRequest(method, path, nil)
@@ -233,7 +249,7 @@ func TestStatus_RealPostgres(t *testing.T) {
 	defer prov.Close()
 	idp := authtest.New(t)
 	v, _ := auth.NewVerifier(ctx, auth.OIDCConfig{IssuerURL: idp.URL, ClientID: "booth-database"})
-	hs := harness{idp, api.NewHandler(api.Deps{Verifier: func() auth.TokenVerifier { return v }, Source: prov, OperatorWorkspaces: []string{"platform"}}), nil}
+	hs := harness{idp, api.NewHandler(api.Deps{Verifier: func() auth.TokenVerifier { return v }, Source: prov}), nil}
 
 	ws := fmt.Sprintf("view-%d", time.Now().UnixNano())
 	owner := []string{"/workspaces/" + ws + "/owner"}
@@ -272,7 +288,7 @@ func TestStatus_RealPostgres(t *testing.T) {
 	}
 
 	// The operator listing includes it — unlabelled, since the operator isn't a member.
-	_, list := hs.get(t, "/api/databases", "platform", []string{"/workspaces/platform/owner"}, "")
+	_, list := hs.get(t, "/api/databases", "platform", []string{"/workspaces/platform/owner", auth.PlatformOperatorGroup}, "")
 	found := false
 	for _, it := range list["items"].([]any) {
 		m := it.(map[string]any)

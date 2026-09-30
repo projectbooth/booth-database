@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/projectbooth/booth-database/internal/auth"
@@ -72,9 +71,6 @@ type Config struct {
 	// OIDC verifies callers of the read-only admin API (ADR 0093). An empty IssuerURL leaves the
 	// API answering 503; the credential-broker path never depends on it.
 	OIDC auth.OIDCConfig
-	// OperatorWorkspaces are the workspaces whose owners may list every workspace database
-	// (docs/decisions/0004 §1), the ADR 0067 allowlist pattern. Empty = nobody.
-	OperatorWorkspaces []string
 }
 
 // Load reads configuration from the environment.
@@ -157,10 +153,11 @@ func Load() (Config, error) {
 	if cfg.OIDC.IssuerURL != "" && cfg.OIDC.ClientID == "" {
 		return Config{}, fmt.Errorf("BOOTH_OIDC_CLIENT_ID is required when BOOTH_OIDC_ISSUER_URL is set")
 	}
-	for _, ws := range strings.Split(os.Getenv("BOOTH_DATABASE_OPERATOR_WORKSPACES"), ",") {
-		if ws = strings.TrimSpace(ws); ws != "" {
-			cfg.OperatorWorkspaces = append(cfg.OperatorWorkspaces, ws)
-		}
+	// ADR 0094 replaced the operator-workspace allowlist with the /platform/operator claim. Refuse
+	// to start with the old setting rather than silently ignore it: an operator who set it would
+	// otherwise believe it still grants (or limits) access.
+	if os.Getenv("BOOTH_DATABASE_OPERATOR_WORKSPACES") != "" {
+		return Config{}, fmt.Errorf("BOOTH_DATABASE_OPERATOR_WORKSPACES is no longer supported: platform operators are identified by the /platform/operator groups claim (ADR 0094)")
 	}
 
 	cfg.PinStatefulSet = os.Getenv("BOOTH_DATABASE_PIN_STATEFULSET")

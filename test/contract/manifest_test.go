@@ -145,19 +145,25 @@ func TestManifest_RequiredFields(t *testing.T) {
 	}
 }
 
-// The admin view's API verifies tokens against the same OIDC provider core uses (ADR 0041), and
-// its operator allowlist is opt-in. Nothing OIDC-related renders unless configured.
+// The admin view's API verifies tokens against the same OIDC provider core uses (ADR 0041).
+// Nothing OIDC-related renders unless configured. Operators come from the token (ADR 0094), so the
+// chart has no operator setting at all, and the retired allowlist fails the render.
 func TestChart_AdminViewConfig(t *testing.T) {
 	requireHelm(t)
 	if s := string(helmTemplate(t)); strings.Contains(s, "BOOTH_OIDC_ISSUER_URL") || strings.Contains(s, "BOOTH_DATABASE_OPERATOR_WORKSPACES") {
 		t.Error("admin-view settings rendered without being configured")
 	}
-	s := string(helmTemplate(t, "--set", "oidc.issuerUrl=https://idp.example/realms/booth", "--set", "oidc.clientId=booth-database",
-		"--set", "adminView.operatorWorkspaces={platform,ops}"))
-	for _, want := range []string{"BOOTH_OIDC_ISSUER_URL", `value: "https://idp.example/realms/booth"`, "BOOTH_OIDC_GROUPS_CLAIM", `value: "platform,ops"`} {
+	s := string(helmTemplate(t, "--set", "oidc.issuerUrl=https://idp.example/realms/booth", "--set", "oidc.clientId=booth-database"))
+	for _, want := range []string{"BOOTH_OIDC_ISSUER_URL", `value: "https://idp.example/realms/booth"`, "BOOTH_OIDC_GROUPS_CLAIM"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("render lacks %s", want)
 		}
+	}
+	if strings.Contains(s, "OPERATOR") {
+		t.Error("an operator setting still renders; ADR 0094 identifies operators from the token")
+	}
+	if out, err := runHelm("--set", "adminView.operatorWorkspaces={platform}"); err == nil || !strings.Contains(string(out), "ADR 0094") {
+		t.Errorf("the retired adminView.operatorWorkspaces rendered, or failed without saying why:\n%.300s", out)
 	}
 	if out, err := runHelm("--set", "oidc.issuerUrl=https://idp.example"); err == nil {
 		t.Errorf("rendered an issuer with no client id:\n%.200s", out)

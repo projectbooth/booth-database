@@ -20,6 +20,10 @@ Status: **implemented** (2026-09-30). Closes 0001 §8 ("no UI in v0") per ADR 00
 
 ## §1 Judgment call: an owner sees only their own workspace; the cross-workspace list is operator-gated
 
+**Mechanism superseded (ADR 0094, built in 0005):** operators are now identified by the
+`/platform/operator` groups claim, not the `adminView.operatorWorkspaces` allowlist described below.
+The scoping in this section is unchanged.
+
 ADR 0093 says "list the workspaces with a provisioned database." Taken literally for any workspace
 owner, that would let the owner of workspace A enumerate every other workspace on the deployment.
 That's exactly what ADR 0052 rules out for the user directory, and what this module's hashed
