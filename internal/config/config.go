@@ -9,7 +9,10 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/projectbooth/booth-database/internal/auth"
 )
 
 const (
@@ -65,6 +68,13 @@ type Config struct {
 	// turned bundled.pinToNode off.
 	PinStatefulSet string
 	Namespace      string
+
+	// OIDC verifies callers of the read-only admin API (ADR 0093). An empty IssuerURL leaves the
+	// API answering 503; the credential-broker path never depends on it.
+	OIDC auth.OIDCConfig
+	// OperatorWorkspaces are the workspaces whose owners may list every workspace database
+	// (docs/decisions/0004 §1), the ADR 0067 allowlist pattern. Empty = nobody.
+	OperatorWorkspaces []string
 }
 
 // Load reads configuration from the environment.
@@ -136,6 +146,21 @@ func Load() (Config, error) {
 	// MaxTTL needs no check of its own here: it was already required to be >= a positive MinTTL.
 	if cfg.ReapInterval <= 0 || cfg.LeaseConnectionLimit <= 0 {
 		return Config{}, fmt.Errorf("BOOTH_DATABASE_REAP_INTERVAL and BOOTH_DATABASE_LEASE_CONNECTION_LIMIT must be positive")
+	}
+
+	cfg.OIDC = auth.OIDCConfig{
+		IssuerURL:       os.Getenv("BOOTH_OIDC_ISSUER_URL"),
+		ClientID:        os.Getenv("BOOTH_OIDC_CLIENT_ID"),
+		RequireAudience: os.Getenv("BOOTH_OIDC_REQUIRE_AUDIENCE") == "true",
+		GroupsClaim:     getEnv("BOOTH_OIDC_GROUPS_CLAIM", auth.DefaultGroupsClaim),
+	}
+	if cfg.OIDC.IssuerURL != "" && cfg.OIDC.ClientID == "" {
+		return Config{}, fmt.Errorf("BOOTH_OIDC_CLIENT_ID is required when BOOTH_OIDC_ISSUER_URL is set")
+	}
+	for _, ws := range strings.Split(os.Getenv("BOOTH_DATABASE_OPERATOR_WORKSPACES"), ",") {
+		if ws = strings.TrimSpace(ws); ws != "" {
+			cfg.OperatorWorkspaces = append(cfg.OperatorWorkspaces, ws)
+		}
 	}
 
 	cfg.PinStatefulSet = os.Getenv("BOOTH_DATABASE_PIN_STATEFULSET")

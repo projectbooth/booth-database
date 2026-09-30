@@ -33,6 +33,8 @@ field.
 | `cmd/database`, `internal/` | The provider service (Go): `POST /internal/credentials`, `/healthz`, `/livez` |
 | `internal/provision` | Per-workspace databases, lease roles, the expiry reaper |
 | `internal/nodepin` | Pins the bundled StatefulSet to its node (ADR 0090) |
+| `internal/api`, `internal/auth` | Read-only admin API for the native view (ADR 0093), with OIDC and ADR 0041 role derivation |
+| `web/` | `@projectbooth/database-ui`, the native admin view |
 | `charts/booth-database` | Helm chart: `mode: bundled` or `mode: external`, backup CronJob, `BoothModule` |
 | `client/` | `booth-database-client` (Python, `import booth_database`) |
 | `test/contract`, `test/integration`, `hack/` | Chart contract tests, kind-cluster integration |
@@ -86,6 +88,23 @@ is always the real expiry. A credential stops authenticating at `expiresAt`, and
 open on it is ended within `leases.reapInterval` (default 10s). So **no single session outlives its
 credential (one hour by default)**: longer work should open new connections, which `engine()`
 does for you. Why one hour: docs/decisions/0003.
+
+## Admin view (ADR 0093)
+
+A read-only native view under **Manage** (`navPath: /database`), published as
+`@projectbooth/database-ui` (GitHub Packages; release by pushing a `database-ui-v<version>` tag).
+It shows:
+
+- **Workspace owners:** their own workspace's database (size, tables, active credentials, open
+  connections, created-at), or "no database yet". Editors and viewers see the connect snippet only.
+- **Owners of an operator workspace** (`adminView.operatorWorkspaces`, default none): every
+  workspace's database. Workspaces the viewer doesn't belong to appear by hashed name only; the
+  module never stores slugs.
+- There is no create, drop or change action, by design.
+
+Its API verifies the caller's token itself (ADR 0041), so set `oidc.issuerUrl`/`oidc.clientId` to
+the same provider and client booth-core uses. Unset, the view's API answers 503 and credential
+issuance is unaffected. Design and judgment calls: docs/decisions/0004.
 
 ## Backup and restore (bundled mode)
 

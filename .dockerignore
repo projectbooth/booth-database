@@ -5,3 +5,4 @@ charts
 docs
 hack
 **/*_test.go
+web

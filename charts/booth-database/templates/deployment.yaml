@@ -102,6 +102,21 @@ spec:
             - name: BOOTH_DATABASE_PIN_STATEFULSET
               value: {{ include "booth-database.postgresName" . }}
             {{- end }}
+            {{- with .Values.oidc.issuerUrl }}
+            # The admin view's API (ADR 0093) verifies tokens itself (ADR 0041).
+            - name: BOOTH_OIDC_ISSUER_URL
+              value: {{ . | quote }}
+            - name: BOOTH_OIDC_CLIENT_ID
+              value: {{ required "oidc.clientId is required when oidc.issuerUrl is set" $.Values.oidc.clientId | quote }}
+            - name: BOOTH_OIDC_REQUIRE_AUDIENCE
+              value: {{ $.Values.oidc.requireAudience | quote }}
+            - name: BOOTH_OIDC_GROUPS_CLAIM
+              value: {{ $.Values.oidc.groupsClaim | quote }}
+            {{- end }}
+            {{- with .Values.adminView.operatorWorkspaces }}
+            - name: BOOTH_DATABASE_OPERATOR_WORKSPACES
+              value: {{ join "," . | quote }}
+            {{- end }}
             - name: BOOTH_DATABASE_MIN_TTL
               value: {{ .Values.leases.minTTL | quote }}
             {{- with .Values.leases.maxTTL }}

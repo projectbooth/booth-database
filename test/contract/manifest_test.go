@@ -32,6 +32,8 @@ type boothModule struct {
 		UIIntegrationMode   string         `yaml:"uiIntegrationMode"`
 		HealthCheckPath     string         `yaml:"healthCheckPath"`
 		NavPath             string         `yaml:"navPath"`
+		NavGroup            string         `yaml:"navGroup"`
+		AdminNavPath        string         `yaml:"adminNavPath"`
 		Database            map[string]any `yaml:"database"`
 		WorkloadIdentity    map[string]any `yaml:"workloadIdentity"`
 		Events              map[string]any `yaml:"events"`
@@ -133,9 +135,32 @@ func TestManifest_RequiredFields(t *testing.T) {
 	if m.Spec.ServiceRef.Name == "" || m.Spec.ServiceRef.Port != 8080 {
 		t.Errorf("serviceRef = %+v", m.Spec.ServiceRef)
 	}
-	// hasOwnUi: false means the UI-conditional fields must be absent, not half-filled.
-	if m.Spec.HasOwnUI || m.Spec.UIIntegrationMode != "" || m.Spec.NavPath != "" {
-		t.Errorf("v0 ships no UI, but manifest says hasOwnUi=%v mode=%q navPath=%q", m.Spec.HasOwnUI, m.Spec.UIIntegrationMode, m.Spec.NavPath)
+	// ADR 0093: one native view under Manage, no admin/regular split.
+	if !m.Spec.HasOwnUI || m.Spec.UIIntegrationMode != "native" || m.Spec.NavGroup != "manage" || m.Spec.NavPath != "/database" {
+		t.Errorf("UI fields: hasOwnUi=%v mode=%q navGroup=%q navPath=%q, want true/native/manage//database",
+			m.Spec.HasOwnUI, m.Spec.UIIntegrationMode, m.Spec.NavGroup, m.Spec.NavPath)
+	}
+	if m.Spec.AdminNavPath != "" {
+		t.Errorf("adminNavPath = %q: ADR 0093 is one view, no admin split", m.Spec.AdminNavPath)
+	}
+}
+
+// The admin view's API verifies tokens against the same OIDC provider core uses (ADR 0041), and
+// its operator allowlist is opt-in. Nothing OIDC-related renders unless configured.
+func TestChart_AdminViewConfig(t *testing.T) {
+	requireHelm(t)
+	if s := string(helmTemplate(t)); strings.Contains(s, "BOOTH_OIDC_ISSUER_URL") || strings.Contains(s, "BOOTH_DATABASE_OPERATOR_WORKSPACES") {
+		t.Error("admin-view settings rendered without being configured")
+	}
+	s := string(helmTemplate(t, "--set", "oidc.issuerUrl=https://idp.example/realms/booth", "--set", "oidc.clientId=booth-database",
+		"--set", "adminView.operatorWorkspaces={platform,ops}"))
+	for _, want := range []string{"BOOTH_OIDC_ISSUER_URL", `value: "https://idp.example/realms/booth"`, "BOOTH_OIDC_GROUPS_CLAIM", `value: "platform,ops"`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("render lacks %s", want)
+		}
+	}
+	if out, err := runHelm("--set", "oidc.issuerUrl=https://idp.example"); err == nil {
+		t.Errorf("rendered an issuer with no client id:\n%.200s", out)
 	}
 }
 

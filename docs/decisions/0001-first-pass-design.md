@@ -146,6 +146,8 @@ grant, following booth-lakehouse's client.
 
 ## §8 Judgment call: no UI and no user-facing API in v0
 
+**Superseded (ADR 0093, built in 0004):** a read-only native admin view and its owner-only API now exist.
+
 The brief places this under Manage, but nothing in the v0 definition of done needs a view, and the
 only access path is the broker. So `hasOwnUi: false` (as booth-lakehouse did) and no `/api/*` routes
 at all. A side effect: this module never has to verify an end-user OIDC token, since the one

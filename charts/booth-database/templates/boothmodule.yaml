@@ -1,10 +1,11 @@
 {{- include "booth-database.validateMode" . -}}
 # Registers booth-database with booth-core's module registry (ADR 0019, contracts/module-manifest.md).
 #
-# No UI in v0 (hasOwnUi: false): the brief places the module under Manage, but nothing in the v0
-# definition of done needs a view, and what an admin view should show (per-workspace size, drop a
-# workspace's database) is left as an open item (docs/decisions/0001 §8). Workspace databases are
-# used through the client library.
+# One native view (ADR 0093): a read-only status page under Manage — the active workspace's own
+# database (owners only), plus a cross-workspace listing for owners of an operator workspace
+# (docs/decisions/0004). A single view, deliberately no adminNavPath: there is no separate
+# non-admin browsing experience. UI package: @projectbooth/database-ui (web/). Workspace data
+# itself is still used through the client library, never through this view.
 #
 # Deliberately NO `database:` field: that asks booth-core to provision a module-internal database
 # on core's own Postgres (ADR 0053), which this module neither needs nor should use (ADR 0081).
@@ -20,7 +21,10 @@ spec:
   icon: database
   version: {{ .Chart.AppVersion | quote }}
   contractVersion: "0.1.0"
-  hasOwnUi: false
+  hasOwnUi: true
+  uiIntegrationMode: native
+  navGroup: manage
+  navPath: /database
   healthCheckPath: /healthz
   {{- if .Values.credentialBroker.enabled }}
   # ADR 0080/0088: this module mints short-lived `postgres` credentials for the credential

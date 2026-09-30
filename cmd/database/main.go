@@ -18,6 +18,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/projectbooth/booth-database/internal/api"
+	"github.com/projectbooth/booth-database/internal/auth"
 	"github.com/projectbooth/booth-database/internal/config"
 	"github.com/projectbooth/booth-database/internal/credentialbroker"
 	"github.com/projectbooth/booth-database/internal/nodepin"
@@ -92,6 +94,41 @@ func run() error {
 		go nodepin.Run(ctx, kube, cfg.Namespace, cfg.PinStatefulSet, nodepin.Options{})
 	}
 
+	// The admin API's verifier is built in the background, retrying OIDC discovery: the identity
+	// provider being unreachable must never stop this module issuing credentials, and until it
+	// works the API answers 503 rather than letting anything through (internal/api).
+	var verifier atomic.Pointer[auth.Verifier]
+	if cfg.OIDC.IssuerURL == "" {
+		log.Print("WARNING: BOOTH_OIDC_ISSUER_URL is not set — the admin view's API (/api/*) will answer 503. Set oidc.issuerUrl/clientId in the chart to enable it.")
+	} else {
+		go func() {
+			for {
+				v, err := auth.NewVerifier(ctx, cfg.OIDC)
+				if err == nil {
+					verifier.Store(v)
+					log.Printf("admin API: verifying tokens against %s", cfg.OIDC.IssuerURL)
+					return
+				}
+				log.Printf("admin API: OIDC discovery failed (%v); retrying", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(10 * time.Second):
+				}
+			}
+		}()
+	}
+	adminAPI := api.NewHandler(api.Deps{
+		Verifier: func() auth.TokenVerifier {
+			if v := verifier.Load(); v != nil {
+				return v
+			}
+			return nil
+		},
+		Source:             prov,
+		OperatorWorkspaces: cfg.OperatorWorkspaces,
+	})
+
 	httpServer := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: server.NewRouter(server.Deps{
@@ -104,6 +141,7 @@ func run() error {
 				MinTTL:     cfg.MinTTL,
 				MaxTTL:     cfg.MaxTTL,
 			}),
+			API: adminAPI,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
