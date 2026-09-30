@@ -97,8 +97,9 @@ It shows:
 
 - **Workspace owners:** their own workspace's database (size, tables, active credentials, open
   connections, created-at), or "no database yet". Editors and viewers see the connect snippet only.
-- **Owners who are platform operators** (their token's groups claim contains `/platform/operator`,
-  ADR 0094, granted in the identity provider): every workspace's database. Workspaces the viewer
+- **Platform operators** (their token's groups claim contains `/platform/operator`, ADR 0094,
+  granted in the identity provider), whatever their role in the current workspace: every
+  workspace's database. Workspaces the viewer
   doesn't belong to appear by hashed name only; the module never stores slugs.
 - There is no create, drop or change action, by design.
 

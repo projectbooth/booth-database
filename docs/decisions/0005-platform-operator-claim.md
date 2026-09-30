@@ -5,13 +5,13 @@ rest of 0004 stands.
 
 ## What changed
 
-- **An operator is a workspace owner whose verified token has `/platform/operator` in its groups
-  claim.** The claim is read from the same verified token and groups claim as every workspace role
+- **An operator is anyone whose verified token has `/platform/operator` in its groups claim**
+  (originally "a workspace owner whose…"; see "Resolved" below). The claim is read from the same verified token and groups claim as every workspace role
   (`auth.Identity.IsPlatformOperator`), never from a header. The match is exact: `/platform/operator/`,
   `/Platform/Operator`, `platform/operator`, `/platform/operators` and
   `/workspaces/platform/operator` all don't count (tested).
-- **ADR 0093's scoping is unchanged**, as ADR 0094 requires: both routes stay owner-only, an owner
-  sees their own workspace by default, and an operator sees every workspace's database. It fails
+- **ADR 0093's scoping is otherwise unchanged**: an owner sees their own workspace, and an operator
+  sees every workspace's database. It fails
   closed: with no operator claim, `/api/databases` is refused and the listing isn't even read.
 - **The allowlist is gone**: `adminView.operatorWorkspaces` (chart) and
   `BOOTH_DATABASE_OPERATOR_WORKSPACES` (env). **Both are refused loudly rather than ignored.** A
@@ -22,15 +22,22 @@ rest of 0004 stands.
 - `@projectbooth/database-ui` 0.1.1 changes one line of text ("Visible because you're a platform
   operator"). The props and API shape are unchanged.
 
-## One thing worth a look
+## Resolved: operator status stands on its own (ADR 0094 clarification)
 
-ADR 0094 calls operator status "a property of the person, not of any workspace they happen to be
-acting in", but also keeps ADR 0093's owner-only scoping unchanged. Following the instruction
-literally, an operator still has to be an **owner of whichever workspace they're viewing the page
-from** to get the listing. An operator who is only an editor of their current workspace, or holds
-no workspace role at all, can't reach it.
+The first version of this change (`bb7f090`) kept "owner of the active workspace" as a precondition
+for operators, the literal reading of "ADR 0093 scoping unchanged". I flagged that here, and it was
+ruled the other way. ADR 0094's clarification says operator status is orthogonal to workspace
+role, which is also how booth-lakehouse built it. So:
 
-I kept the literal reading, since it's the stricter one and the one asked for. If operator status
-should stand on its own (for example, `/api/databases` for any verified operator regardless of
-active-workspace role), that's a small, contained change to `isOperator` plus the owner gate. I'd
-want it ruled on rather than assumed, because it widens who can reach the route.
+- **`GET /api/databases` has its own gate, `requireOperator`**: the `/platform/operator` claim
+  alone, independent of the caller's role in the workspace they're acting in. An operator acting
+  as a viewer or editor gets the full listing (tested).
+- **`GET /api/status` keeps `requireOwner` exactly as before**, operator or not. The two routes
+  used to share one blanket owner gate, which would have refused an operator before the operator
+  check ever ran. Each route now has its own gate, so neither can shadow the other.
+- Everything else is unchanged: the claim is still an exact match read from the verified token, a
+  forged role header is still rejected (ADR 0041), and it still fails closed.
+- **UI (0.1.2):** a non-owner can't call `/api/status`, the only route that reported the operator
+  hint. So for non-owners the view now makes one probe of `/api/databases`. A 200 shows the
+  listing; a 403 (the normal case) shows exactly what it showed before, with no error. The server
+  enforces the rule either way. The probe only decides what to render.

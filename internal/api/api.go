@@ -1,13 +1,14 @@
 // Package api is booth-database's user-facing, read-only admin API (ADR 0093), reached through
-// booth-core's gateway at /modules/database/api/*. Two routes, both GET, both owner-only
-// (docs/decisions/0004 §2), both behind internal/auth's real token verification and ADR 0041
-// role derivation:
+// booth-core's gateway at /modules/database/api/*. Two GET routes, each with its own gate, both
+// behind internal/auth's real token verification and ADR 0041 role derivation:
 //
-//   - GET /api/status: the active workspace's own database, or "not provisioned yet".
-//   - GET /api/databases: every workspace database on the server, for a platform operator
-//     (ADR 0094: the verified token's groups claim contains /platform/operator) who also owns the
-//     active workspace — ADR 0093's scoping is unchanged, only how an operator is identified
-//     (docs/decisions/0005). Nobody else can call it.
+//   - GET /api/status: owners of the active workspace (docs/decisions/0004 §2) — that
+//     workspace's own database, or "not provisioned yet".
+//   - GET /api/databases: platform operators (ADR 0094: the verified token's groups claim
+//     contains /platform/operator) — every workspace database on the server. Operator status is
+//     checked on its own, independent of the caller's role in the workspace they're acting in
+//     ("orthogonal to workspace role", ADR 0094's clarification; docs/decisions/0005). Nobody
+//     else can call it.
 //
 // Nothing here writes anything: no route provisions, drops or alters a database (ADR 0093, and
 // ADR 0089's accepted "deletion unhandled" call).
@@ -40,12 +41,18 @@ type Deps struct {
 	Source   StatusSource
 }
 
-// NewHandler builds the /api/* routes.
+// NewHandler builds the /api/* routes. Each route gets its own gate rather than one blanket
+// wrapper, so the owner-only gate on /api/status can never shadow the operator gate on
+// /api/databases.
 func NewHandler(d Deps) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/status", d.status)
-	mux.HandleFunc("GET /api/databases", d.databases)
-	protected := d.requireOwner(mux)
+	statusMux := http.NewServeMux()
+	statusMux.HandleFunc("GET /api/status", d.status)
+	databasesMux := http.NewServeMux()
+	databasesMux.HandleFunc("GET /api/databases", d.databases)
+
+	protected := http.NewServeMux()
+	protected.Handle("/api/status", d.requireOwner(statusMux))
+	protected.Handle("/api/databases", d.requireOperator(databasesMux))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -74,11 +81,27 @@ func (d Deps) requireOwner(next http.Handler) http.Handler {
 	})
 }
 
-// isOperator: ADR 0094's /platform/operator claim, on top of this view's existing owner-only
-// rule (ADR 0093 scoping unchanged). Both facts come from the verified token; with no operator
-// claim the listing is refused (fail closed).
+// requireOperator runs after auth.Middleware: platform operators only, independent of the
+// caller's role in their active workspace (ADR 0094 — "orthogonal to workspace role").
+func (d Deps) requireOperator(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := auth.FromContext(r.Context())
+		if !ok {
+			auth.WriteError(w, http.StatusUnauthorized, "no identity")
+			return
+		}
+		if !d.isOperator(id) {
+			auth.WriteError(w, http.StatusForbidden, "listing every workspace's database is limited to platform operators")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isOperator is ADR 0094's /platform/operator claim alone, read from the verified token; without
+// it the listing is refused (fail closed). Also the hint /api/status returns to the UI.
 func (d Deps) isOperator(id auth.Identity) bool {
-	return id.IsOwner() && id.IsPlatformOperator()
+	return id.IsPlatformOperator()
 }
 
 type statusResponse struct {
