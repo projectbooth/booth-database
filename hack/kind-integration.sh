@@ -50,7 +50,7 @@ kubectl -n "$NS" create secret generic booth-credential-broker-provider-credenti
 
 helm upgrade --install db charts/booth-database -n "$NS" \
   --set image.repository=booth-database --set image.tag=it --set image.pullPolicy=Never \
-  --set leases.reapInterval=2s --wait --timeout 5m
+  --set leases.reapInterval=2s --set leases.minTTL=1s --set leases.maxTTL=1h --wait --timeout 5m
 
 echo "--- BoothModule accepted by booth-core's real CRD schema:"
 kubectl -n "$NS" get boothmodule database -o jsonpath='{.spec.id} providesCredentials={.spec.providesCredentials.kinds}{"\n"}'

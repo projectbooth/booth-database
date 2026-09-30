@@ -22,8 +22,8 @@ func TestLoad_BundledDefaults(t *testing.T) {
 	if cfg.Mode != ModeBundled || !cfg.RestrictMaintenanceAccess {
 		t.Errorf("bundled mode must always restrict maintenance access: %+v", cfg)
 	}
-	if cfg.MaxTTL != 5*time.Minute || cfg.ReapInterval != 10*time.Second || cfg.LeaseConnectionLimit != 10 {
-		t.Errorf("defaults = %v %v %d", cfg.MaxTTL, cfg.ReapInterval, cfg.LeaseConnectionLimit)
+	if cfg.MinTTL != time.Hour || cfg.MaxTTL != time.Hour || cfg.ReapInterval != 10*time.Second || cfg.LeaseConnectionLimit != 10 {
+		t.Errorf("defaults = min %v max %v reap %v limit %d", cfg.MinTTL, cfg.MaxTTL, cfg.ReapInterval, cfg.LeaseConnectionLimit)
 	}
 	if cfg.ClientHost != "pg.internal" || cfg.ClientPort != 5432 || cfg.ClientSSLMode != "prefer" {
 		t.Errorf("client endpoint should default to the admin one: %s:%d %s", cfg.ClientHost, cfg.ClientPort, cfg.ClientSSLMode)
@@ -93,5 +93,27 @@ func TestLoad_NodePin(t *testing.T) {
 	t.Setenv("BOOTH_DATABASE_MODE", "external")
 	if _, err := Load(); err == nil {
 		t.Error("pinning accepted in external mode")
+	}
+}
+
+func TestLoad_TTLWindow(t *testing.T) {
+	setBase(t)
+	t.Setenv("BOOTH_DATABASE_MIN_TTL", "10m")
+	cfg, err := Load()
+	if err != nil || cfg.MinTTL != 10*time.Minute || cfg.MaxTTL != 10*time.Minute {
+		t.Fatalf("MaxTTL should default to the floor: %+v %v", cfg, err)
+	}
+	t.Setenv("BOOTH_DATABASE_MAX_TTL", "2h")
+	if cfg, err = Load(); err != nil || cfg.MaxTTL != 2*time.Hour {
+		t.Fatalf("explicit cap: %+v %v", cfg, err)
+	}
+	t.Setenv("BOOTH_DATABASE_MAX_TTL", "5m")
+	if _, err := Load(); err == nil {
+		t.Error("accepted a cap below the floor")
+	}
+	t.Setenv("BOOTH_DATABASE_MAX_TTL", "")
+	t.Setenv("BOOTH_DATABASE_MIN_TTL", "0s")
+	if _, err := Load(); err == nil {
+		t.Error("accepted a zero floor")
 	}
 }

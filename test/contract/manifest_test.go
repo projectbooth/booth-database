@@ -332,3 +332,24 @@ func TestChart_NetworkPolicy(t *testing.T) {
 		t.Error("external mode renders a NetworkPolicy for a server it doesn't run")
 	}
 }
+
+// ADR 0089 §3: the chart ships the one-hour provider floor by default, and leaves the cap unset
+// (the service then defaults it to the floor).
+func TestChart_TTLFloor(t *testing.T) {
+	requireHelm(t)
+	env := map[string]string{}
+	for _, c := range podSpec(t, helmTemplate(t), "Deployment")["containers"].([]any) {
+		for _, e := range c.(map[string]any)["env"].([]any) {
+			ev := e.(map[string]any)
+			if v, ok := ev["value"].(string); ok {
+				env[ev["name"].(string)] = v
+			}
+		}
+	}
+	if env["BOOTH_DATABASE_MIN_TTL"] != "1h" {
+		t.Errorf("BOOTH_DATABASE_MIN_TTL = %q, want the 1h floor", env["BOOTH_DATABASE_MIN_TTL"])
+	}
+	if _, set := env["BOOTH_DATABASE_MAX_TTL"]; set {
+		t.Error("BOOTH_DATABASE_MAX_TTL rendered by default; it should fall back to the floor")
+	}
+}

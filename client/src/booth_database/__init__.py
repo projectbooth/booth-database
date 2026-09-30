@@ -10,7 +10,7 @@
     df.to_sql("notes_copy", booth_database.engine())            # with SQLAlchemy installed
 
 No password to handle: each call asks booth-core's credential broker (ADR 0080) for a credential
-good for a few minutes, for this workspace's database only, as this notebook or pipeline run's own
+good for an hour by default (booth-database's lease floor), for this workspace's database only, as this notebook or pipeline run's own
 identity. Configuration comes from the environment a platform workload already has — see
 ``Database.from_env``.
 """

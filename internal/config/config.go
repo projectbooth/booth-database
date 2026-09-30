@@ -42,7 +42,12 @@ type Config struct {
 	// 0054 §2's exact precedent.
 	RestrictMaintenanceAccess bool
 
+	// MinTTL is the provider's floor on a lease's lifetime (ADR 0089 §3): every request below it —
+	// under the broker's 5-minute ceiling, every request — is clamped up to it. Default one hour;
+	// reasoning in docs/decisions/0003.
+	MinTTL time.Duration
 	// MaxTTL caps a lease's lifetime on this side, independently of the broker's own ceiling.
+	// Must be >= MinTTL; defaults to it.
 	MaxTTL time.Duration
 	// LeaseConnectionLimit is each lease role's CONNECTION LIMIT.
 	LeaseConnectionLimit int
@@ -110,8 +115,17 @@ func Load() (Config, error) {
 		}
 	}
 
-	if cfg.MaxTTL, err = durationEnv("BOOTH_DATABASE_MAX_TTL", 5*time.Minute); err != nil {
+	if cfg.MinTTL, err = durationEnv("BOOTH_DATABASE_MIN_TTL", time.Hour); err != nil {
 		return Config{}, err
+	}
+	if cfg.MaxTTL, err = durationEnv("BOOTH_DATABASE_MAX_TTL", cfg.MinTTL); err != nil {
+		return Config{}, err
+	}
+	if cfg.MinTTL <= 0 {
+		return Config{}, fmt.Errorf("BOOTH_DATABASE_MIN_TTL must be positive")
+	}
+	if cfg.MaxTTL < cfg.MinTTL {
+		return Config{}, fmt.Errorf("BOOTH_DATABASE_MAX_TTL (%s) must be at least BOOTH_DATABASE_MIN_TTL (%s)", cfg.MaxTTL, cfg.MinTTL)
 	}
 	if cfg.ReapInterval, err = durationEnv("BOOTH_DATABASE_REAP_INTERVAL", 10*time.Second); err != nil {
 		return Config{}, err
