@@ -133,8 +133,9 @@ func Load() (Config, error) {
 	if cfg.LeaseConnectionLimit, err = intEnv("BOOTH_DATABASE_LEASE_CONNECTION_LIMIT", 10); err != nil {
 		return Config{}, err
 	}
-	if cfg.MaxTTL <= 0 || cfg.ReapInterval <= 0 || cfg.LeaseConnectionLimit <= 0 {
-		return Config{}, fmt.Errorf("BOOTH_DATABASE_MAX_TTL, BOOTH_DATABASE_REAP_INTERVAL and BOOTH_DATABASE_LEASE_CONNECTION_LIMIT must be positive")
+	// MaxTTL needs no check of its own here: it was already required to be >= a positive MinTTL.
+	if cfg.ReapInterval <= 0 || cfg.LeaseConnectionLimit <= 0 {
+		return Config{}, fmt.Errorf("BOOTH_DATABASE_REAP_INTERVAL and BOOTH_DATABASE_LEASE_CONNECTION_LIMIT must be positive")
 	}
 
 	cfg.PinStatefulSet = os.Getenv("BOOTH_DATABASE_PIN_STATEFULSET")
