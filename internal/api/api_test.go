@@ -137,9 +137,8 @@ func TestDatabases_OperatorOnly(t *testing.T) {
 	src := &fakeSource{list: []provision.Status{{Database: dbName(t, "acme")}, {Database: dbName(t, "globex")}, {Database: dbName(t, "initech")}}}
 	hs := newHarness(t, src)
 
-	// ADR 0094: only the exact /platform/operator claim counts, on top of owning the active
-	// workspace (ADR 0093 scoping unchanged). Everything else fails closed, and the listing
-	// isn't even read.
+	// ADR 0094: only the exact /platform/operator claim counts. Everything else fails closed,
+	// and the listing isn't even read.
 	for _, tc := range []struct {
 		name   string
 		groups []string
@@ -147,7 +146,6 @@ func TestDatabases_OperatorOnly(t *testing.T) {
 		{"ordinary owner", []string{"/workspaces/acme/owner"}},
 		// The old stopgap's shape — owning a workspace called "platform" — grants nothing now.
 		{"owner of a workspace named platform", []string{"/workspaces/platform/owner"}},
-		{"operator claim but only an editor here", []string{"/workspaces/acme/editor", "/platform/operator"}},
 		{"near-miss claims", []string{"/workspaces/acme/owner", "/platform/operator/", "/Platform/Operator", "/platform/operators", "platform/operator", "/platform/admin"}},
 		{"operator claim for a workspace called platform", []string{"/workspaces/acme/owner", "/workspaces/platform/operator"}},
 	} {
@@ -163,8 +161,24 @@ func TestDatabases_OperatorOnly(t *testing.T) {
 		})
 	}
 
-	// A platform operator who owns the active workspace can; slugs appear only for workspaces the
-	// caller belongs to.
+	// ADR 0094's clarification: operator status stands on its own, whatever the caller's role in
+	// the workspace they're acting in.
+	for _, role := range []string{"viewer", "editor", "owner"} {
+		rec, _ := hs.get(t, "/api/databases", "acme", []string{"/workspaces/acme/" + role, auth.PlatformOperatorGroup}, "")
+		if rec.Code != 200 {
+			t.Errorf("operator acting as %s: %d %s", role, rec.Code, rec.Body)
+		}
+	}
+	// ...and the owner-only gate on /api/status is untouched by it.
+	if rec, _ := hs.get(t, "/api/status", "acme", []string{"/workspaces/acme/viewer", auth.PlatformOperatorGroup}, ""); rec.Code != 403 {
+		t.Errorf("operator acting as viewer got /api/status: %d", rec.Code)
+	}
+	// A forged owner header still can't lift a viewer, operator or not (ADR 0041).
+	if rec, _ := hs.get(t, "/api/status", "acme", []string{"/workspaces/acme/viewer", auth.PlatformOperatorGroup}, "owner"); rec.Code != 403 {
+		t.Errorf("forged owner header: %d", rec.Code)
+	}
+
+	// Slugs appear only for workspaces the caller belongs to.
 	groups := []string{"/workspaces/platform/owner", "/workspaces/acme/viewer", auth.PlatformOperatorGroup}
 	rec, body := hs.get(t, "/api/databases", "platform", groups, "")
 	if rec.Code != 200 {
@@ -212,7 +226,7 @@ func TestReadOnlyRoutes(t *testing.T) {
 	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodPut} {
 		for _, path := range []string{"/api/status", "/api/databases"} {
 			req := httptest.NewRequest(method, path, nil)
-			req.Header.Set("Authorization", "Bearer "+hs.idp.Mint(t, authtest.Token{Subject: "u", Groups: []string{"/workspaces/platform/owner"}}))
+			req.Header.Set("Authorization", "Bearer "+hs.idp.Mint(t, authtest.Token{Subject: "u", Groups: []string{"/workspaces/platform/owner", auth.PlatformOperatorGroup}}))
 			req.Header.Set(auth.HeaderBoothWorkspace, "platform")
 			rec := httptest.NewRecorder()
 			hs.h.ServeHTTP(rec, req)

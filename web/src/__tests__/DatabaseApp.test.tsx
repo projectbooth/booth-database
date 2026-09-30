@@ -64,17 +64,29 @@ describe("DatabaseApp", () => {
     expect(await screen.findByText("No database yet")).toBeInTheDocument();
   });
 
-  it("never calls the API for a non-owner", async () => {
+  it("only probes the operator listing for a non-owner, and a 403 shows nothing more", async () => {
     for (const role of ["editor", "viewer"] as const) {
-      const calls = mockFetch({});
+      const calls = mockFetch({ "/modules/database/api/databases": { status: 403, json: { error: "limited to platform operators" } } });
       const { unmount } = mount(role);
-      expect(screen.getByText(/visible to workspace owners/)).toBeInTheDocument();
+      expect(screen.getByText(/visible to its owners/)).toBeInTheDocument();
       // The connect snippet is still useful to everyone.
       expect(screen.getByText(/booth_database.connect\(\)/)).toBeInTheDocument();
+      await waitFor(() => expect(calls).toHaveLength(1));
       await new Promise((r) => setTimeout(r, 0));
-      expect(calls).toHaveLength(0);
+      // Never the owner-only status route, and no error or listing for the normal 403.
+      expect(calls.map((c) => c.path)).toEqual(["/modules/database/api/databases"]);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText("All workspace databases")).not.toBeInTheDocument();
       unmount();
     }
+  });
+
+  it("shows a non-owner platform operator every database (ADR 0094)", async () => {
+    mockFetch({ "/modules/database/api/databases": { json: { items: [{ ...DB, workspace: "acme", tables: undefined }] } } });
+    mount("viewer");
+    expect(await screen.findByText("All workspace databases")).toBeInTheDocument();
+    expect(screen.getByText("1 database")).toBeInTheDocument();
+    expect(screen.getByText(/visible to its owners/)).toBeInTheDocument();
   });
 
   it("omits Authorization when the shell has no token", async () => {

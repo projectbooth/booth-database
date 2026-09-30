@@ -21,8 +21,8 @@ export interface DatabaseAppProps {
 
 /**
  * The native view booth-design mounts for booth-database (ADR 0030, ADR 0093): a read-only status
- * page. Owners see their workspace's database; owners who are also platform operators
- * (/platform/operator, ADR 0094) see every workspace's database. Nothing here can create, change or drop a database — deliberately
+ * page. Owners see their workspace's database; platform operators (/platform/operator, ADR 0094)
+ * see every workspace's database, whatever their role in the workspace they're acting in. Nothing here can create, change or drop a database — deliberately
  * (ADR 0093, ADR 0089). No outer padding: the shell owns it (ADR 0072).
  */
 export function DatabaseApp({ workspace, role, theme, getAccessToken }: DatabaseAppProps) {
@@ -50,7 +50,7 @@ export function DatabaseApp({ workspace, role, theme, getAccessToken }: Database
         )}
       </header>
 
-      {isOwner ? <OwnerView state={state} api={api} /> : <NotOwner />}
+      {isOwner ? <OwnerView state={state} api={api} /> : <NonOwnerView api={api} />}
 
       <ConnectSnippet />
     </div>
@@ -95,6 +95,26 @@ function WorkspaceCard({ db }: { db: DatabaseStatus }) {
 
 function AllDatabases({ api }: { api: ApiContext }) {
   const { state } = useLoad(() => listDatabases(api), [api]);
+  return <AllDatabasesSection state={state} />;
+}
+
+/**
+ * A non-owner can't see /api/status, but may still be a platform operator (ADR 0094: operator
+ * status is independent of workspace role). The props carry no operator flag, so ask the one
+ * route that knows: a 200 means operator, a 403 (the usual answer) means not. The server enforces
+ * this either way; the probe only decides what to show.
+ */
+function NonOwnerView({ api }: { api: ApiContext }) {
+  const { state } = useLoad(() => listDatabases(api), [api]);
+  return (
+    <>
+      <NotOwner />
+      {state.status === "ready" && <AllDatabasesSection state={state} />}
+    </>
+  );
+}
+
+function AllDatabasesSection({ state }: { state: LoadState<ListedDatabase[]> }) {
   return (
     <section aria-labelledby="all-dbs" className="flex flex-col gap-2">
       <h2 id="all-dbs" className="text-sm font-semibold">
@@ -157,7 +177,7 @@ function DatabaseTable({ rows }: { rows: ListedDatabase[] }) {
 function NotOwner() {
   return (
     <Panel>
-      <p className="text-sm text-slate-600 dark:text-slate-300">Database status is visible to workspace owners.</p>
+      <p className="text-sm text-slate-600 dark:text-slate-300">This workspace&apos;s database status is visible to its owners.</p>
     </Panel>
   );
 }
