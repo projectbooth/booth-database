@@ -1,4 +1,7 @@
 {{- include "booth-database.validateMode" . -}}
+{{- if dig "operatorWorkspaces" nil (.Values.adminView | default dict) }}
+{{- fail "adminView.operatorWorkspaces was removed (ADR 0094): platform operators are now identified by the /platform/operator groups claim in their token. Grant that group in your identity provider and delete this value." }}
+{{- end }}
 {{- $bundled := eq .Values.mode "bundled" -}}
 {{- if not $bundled }}
 {{- $_ := required "external.host is required when mode=external" .Values.external.host -}}
@@ -112,10 +115,6 @@ spec:
               value: {{ $.Values.oidc.requireAudience | quote }}
             - name: BOOTH_OIDC_GROUPS_CLAIM
               value: {{ $.Values.oidc.groupsClaim | quote }}
-            {{- end }}
-            {{- with .Values.adminView.operatorWorkspaces }}
-            - name: BOOTH_DATABASE_OPERATOR_WORKSPACES
-              value: {{ join "," . | quote }}
             {{- end }}
             - name: BOOTH_DATABASE_MIN_TTL
               value: {{ .Values.leases.minTTL | quote }}

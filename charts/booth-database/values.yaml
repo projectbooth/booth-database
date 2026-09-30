@@ -23,20 +23,14 @@ service:
 oidc:
   # The read-only admin view's API (ADR 0093) verifies each caller's token itself (ADR 0041),
   # against the same OIDC provider and client booth-core uses. Left empty, the view's API answers
-  # 503 and the rest of the module (credential issuance) is unaffected.
+  # 503 and the rest of the module (credential issuance) is unaffected. Platform operators (who may
+  # also list every workspace's database) are identified by the /platform/operator groups claim
+  # (ADR 0094), granted in the identity provider, not configured here.
   issuerUrl: ""
   clientId: ""
   requireAudience: true
   # Must match booth-core's BOOTH_OIDC_GROUPS_CLAIM (ADR 0025).
   groupsClaim: groups
-
-adminView:
-  # Owners of these workspaces may list EVERY workspace's database (size, age, credentials) — the
-  # same stopgap booth-logging uses for a platform-operator role the platform doesn't define yet
-  # (ADR 0067's access.workspaces). Typically one dedicated "platform"/"ops" workspace. Empty
-  # (the default): each owner sees only their own workspace's database. Databases are listed by
-  # their hashed name; only workspaces the viewer belongs to are shown by slug.
-  operatorWorkspaces: []
 
 # "bundled": this chart runs its own PostgreSQL StatefulSet (below), distinct from booth-core's.
 # "external": point at a PostgreSQL-compatible cluster you run yourself (`external:` below).

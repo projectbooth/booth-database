@@ -21,8 +21,8 @@ export interface DatabaseAppProps {
 
 /**
  * The native view booth-design mounts for booth-database (ADR 0030, ADR 0093): a read-only status
- * page. Owners see their workspace's database; owners of an operator workspace also see every
- * workspace's database. Nothing here can create, change or drop a database — deliberately
+ * page. Owners see their workspace's database; owners who are also platform operators
+ * (/platform/operator, ADR 0094) see every workspace's database. Nothing here can create, change or drop a database — deliberately
  * (ADR 0093, ADR 0089). No outer padding: the shell owns it (ADR 0072).
  */
 export function DatabaseApp({ workspace, role, theme, getAccessToken }: DatabaseAppProps) {
@@ -101,7 +101,7 @@ function AllDatabases({ api }: { api: ApiContext }) {
         All workspace databases
       </h2>
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        Visible because this is an operator workspace. Workspaces you aren&apos;t a member of are shown by database name only.
+        Visible because you&apos;re a platform operator. Workspaces you aren&apos;t a member of are shown by database name only.
       </p>
       {state.status === "loading" && <Muted>Loading…</Muted>}
       {state.status === "error" && <ErrorBanner state={state} />}

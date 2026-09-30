@@ -97,14 +97,14 @@ It shows:
 
 - **Workspace owners:** their own workspace's database (size, tables, active credentials, open
   connections, created-at), or "no database yet". Editors and viewers see the connect snippet only.
-- **Owners of an operator workspace** (`adminView.operatorWorkspaces`, default none): every
-  workspace's database. Workspaces the viewer doesn't belong to appear by hashed name only; the
-  module never stores slugs.
+- **Owners who are platform operators** (their token's groups claim contains `/platform/operator`,
+  ADR 0094, granted in the identity provider): every workspace's database. Workspaces the viewer
+  doesn't belong to appear by hashed name only; the module never stores slugs.
 - There is no create, drop or change action, by design.
 
 Its API verifies the caller's token itself (ADR 0041), so set `oidc.issuerUrl`/`oidc.clientId` to
 the same provider and client booth-core uses. Unset, the view's API answers 503 and credential
-issuance is unaffected. Design and judgment calls: docs/decisions/0004.
+issuance is unaffected. Design and judgment calls: docs/decisions/0004 and 0005.
 
 ## Backup and restore (bundled mode)
 

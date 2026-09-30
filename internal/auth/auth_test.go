@@ -132,3 +132,15 @@ func TestMiddleware(t *testing.T) {
 		})
 	}
 }
+
+func TestIsPlatformOperator(t *testing.T) {
+	yes := auth.Identity{Groups: []string{"/workspaces/acme/viewer", auth.PlatformOperatorGroup}}
+	if !yes.IsPlatformOperator() {
+		t.Error("exact /platform/operator not recognised")
+	}
+	for _, groups := range [][]string{nil, {"/platform/operator/"}, {"/Platform/Operator"}, {"platform/operator"}, {"/platform/operators"}, {"/workspaces/platform/owner"}} {
+		if (auth.Identity{Groups: groups}).IsPlatformOperator() {
+			t.Errorf("%v counted as a platform operator", groups)
+		}
+	}
+}

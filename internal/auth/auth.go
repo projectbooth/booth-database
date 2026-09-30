@@ -183,6 +183,21 @@ type Identity struct {
 // view (docs/decisions/0004 §2).
 func (i Identity) IsOwner() bool { return i.Role == RoleOwner }
 
+// PlatformOperatorGroup is ADR 0094's platform-operator claim: a property of the person, read from
+// the same verified groups claim as workspace roles, never from a forwarded header.
+const PlatformOperatorGroup = "/platform/operator"
+
+// IsPlatformOperator reports whether the verified token's groups contain exactly
+// PlatformOperatorGroup. Exact match only: no prefix, case or trailing-slash variants.
+func (i Identity) IsPlatformOperator() bool {
+	for _, g := range i.Groups {
+		if g == PlatformOperatorGroup {
+			return true
+		}
+	}
+	return false
+}
+
 type contextKey struct{}
 
 // FromContext returns the identity Middleware attached, if any.

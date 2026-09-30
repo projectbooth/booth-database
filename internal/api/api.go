@@ -4,10 +4,10 @@
 // role derivation:
 //
 //   - GET /api/status: the active workspace's own database, or "not provisioned yet".
-//   - GET /api/databases: every workspace database on the server, for an owner acting in one of
-//     the operator workspaces the deployment names (BOOTH_DATABASE_OPERATOR_WORKSPACES). Nobody
-//     else can call it. That mirrors booth-logging's access.workspaces stopgap (ADR 0067) for a
-//     platform operator role that ADR 0025 doesn't define (docs/decisions/0004 §1).
+//   - GET /api/databases: every workspace database on the server, for a platform operator
+//     (ADR 0094: the verified token's groups claim contains /platform/operator) who also owns the
+//     active workspace — ADR 0093's scoping is unchanged, only how an operator is identified
+//     (docs/decisions/0005). Nobody else can call it.
 //
 // Nothing here writes anything: no route provisions, drops or alters a database (ADR 0093, and
 // ADR 0089's accepted "deletion unhandled" call).
@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"slices"
 
 	"github.com/projectbooth/booth-database/internal/auth"
 	"github.com/projectbooth/booth-database/internal/naming"
@@ -39,9 +38,6 @@ type Deps struct {
 	// identity provider, but the admin view must never run without one.
 	Verifier func() auth.TokenVerifier
 	Source   StatusSource
-	// OperatorWorkspaces are the workspaces whose owners may list every database. Empty means
-	// nobody may.
-	OperatorWorkspaces []string
 }
 
 // NewHandler builds the /api/* routes.
@@ -78,8 +74,11 @@ func (d Deps) requireOwner(next http.Handler) http.Handler {
 	})
 }
 
+// isOperator: ADR 0094's /platform/operator claim, on top of this view's existing owner-only
+// rule (ADR 0093 scoping unchanged). Both facts come from the verified token; with no operator
+// claim the listing is refused (fail closed).
 func (d Deps) isOperator(id auth.Identity) bool {
-	return id.IsOwner() && slices.Contains(d.OperatorWorkspaces, id.Workspace)
+	return id.IsOwner() && id.IsPlatformOperator()
 }
 
 type statusResponse struct {
@@ -117,7 +116,7 @@ type listedDatabase struct {
 func (d Deps) databases(w http.ResponseWriter, r *http.Request) {
 	id, _ := auth.FromContext(r.Context())
 	if !d.isOperator(id) {
-		auth.WriteError(w, http.StatusForbidden, "listing every workspace's database is limited to owners of an operator workspace")
+		auth.WriteError(w, http.StatusForbidden, "listing every workspace's database is limited to platform operators")
 		return
 	}
 	list, err := d.Source.ListDatabases(r.Context())

@@ -125,8 +125,7 @@ func run() error {
 			}
 			return nil
 		},
-		Source:             prov,
-		OperatorWorkspaces: cfg.OperatorWorkspaces,
+		Source: prov,
 	})
 
 	httpServer := &http.Server{
