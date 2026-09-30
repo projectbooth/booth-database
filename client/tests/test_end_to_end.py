@@ -85,7 +85,9 @@ def stack(tmp_path_factory):
             pass
         if time.time() > deadline or proc.poll() is not None:
             proc.kill()
-            pytest.fail("provider never became healthy:\n" + proc.stdout.read().decode(errors="replace"))
+            proc.wait(timeout=10)
+            log_file.close()  # flush everything the provider wrote before reading it back
+            pytest.fail("provider never became healthy:\n" + log_path.read_text(errors="replace"))
         time.sleep(0.2)
 
     ws_a, ws_b = f"e2e-a-{uuid.uuid4().hex[:8]}", f"e2e-b-{uuid.uuid4().hex[:8]}"
