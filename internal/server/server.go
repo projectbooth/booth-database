@@ -1,7 +1,7 @@
-// Package server assembles booth-database's HTTP surface. It is deliberately tiny: v0 has no
-// user-facing API and no UI (docs/decisions/0001 §8) — the only way anything reaches a workspace
-// database is a credential minted through booth-core's broker, so the only non-health route is
-// the broker's provider path.
+// Package server assembles booth-database's HTTP surface. It is deliberately small: the only way
+// anything reaches a workspace database is a credential minted through booth-core's broker (the
+// provider path), plus the read-only admin API behind the native view (ADR 0093, /api/*), which
+// reports status and never changes anything.
 package server
 
 import (
@@ -26,6 +26,8 @@ type Deps struct {
 	// until then /healthz reports unready so a half-prepared server is never routed to.
 	Ready    *atomic.Bool
 	Provider http.Handler
+	// API is the read-only admin API (ADR 0093, internal/api), mounted at /api/.
+	API http.Handler
 }
 
 // NewRouter builds the HTTP handler.
@@ -53,6 +55,9 @@ func NewRouter(d Deps) http.Handler {
 	})
 
 	mux.Handle(credentialbroker.ProviderPath, d.Provider)
+	if d.API != nil {
+		mux.Handle("/api/", d.API)
+	}
 	return mux
 }
 

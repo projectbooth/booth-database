@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"net/url"
 	"testing"
 	"time"
@@ -115,5 +116,23 @@ func TestLoad_TTLWindow(t *testing.T) {
 	t.Setenv("BOOTH_DATABASE_MIN_TTL", "0s")
 	if _, err := Load(); err == nil {
 		t.Error("accepted a zero floor")
+	}
+}
+
+func TestLoad_AdminView(t *testing.T) {
+	setBase(t)
+	cfg, err := Load()
+	if err != nil || cfg.OIDC.IssuerURL != "" || len(cfg.OperatorWorkspaces) != 0 {
+		t.Fatalf("defaults: admin API off, no operators: %+v %v", cfg, err)
+	}
+	t.Setenv("BOOTH_OIDC_ISSUER_URL", "https://idp.example/realms/booth")
+	if _, err := Load(); err == nil {
+		t.Error("issuer without a client id accepted")
+	}
+	t.Setenv("BOOTH_OIDC_CLIENT_ID", "booth-database")
+	t.Setenv("BOOTH_DATABASE_OPERATOR_WORKSPACES", " platform, ops ,")
+	cfg, err = Load()
+	if err != nil || cfg.OIDC.GroupsClaim != "groups" || fmt.Sprint(cfg.OperatorWorkspaces) != "[platform ops]" {
+		t.Fatalf("cfg=%+v err=%v", cfg, err)
 	}
 }

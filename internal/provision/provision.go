@@ -43,7 +43,34 @@ import (
 // half-provisioned database (a crash between CREATE DATABASE and its grants) is finished on the
 // next request rather than mistaken for a ready one. Deliberately carries no workspace slug:
 // pg_shdescription is readable by every role on the server (see internal/naming).
+//
+// Since the admin view (ADR 0093) the marker is followed by "; created <RFC 3339 UTC>", because
+// PostgreSQL itself records no creation time for a database. The timestamp reveals only when some
+// unnamed workspace first used its database. Databases provisioned before that change carry the
+// bare marker and report an unknown creation time; readiness is a prefix match so both count.
 const readyMarker = "booth-database workspace database v1"
+
+const createdSep = "; created "
+
+func isReady(comment *string) bool {
+	return comment != nil && (*comment == readyMarker || strings.HasPrefix(*comment, readyMarker+createdSep))
+}
+
+// createdAtFromComment returns the creation time recorded in a ready marker, or nil if none.
+func createdAtFromComment(comment *string) *time.Time {
+	if comment == nil {
+		return nil
+	}
+	s, ok := strings.CutPrefix(*comment, readyMarker+createdSep)
+	if !ok {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
 
 const leaseComment = "booth-database credential-broker lease"
 
@@ -159,7 +186,7 @@ func (p *Provisioner) provision(ctx context.Context, conn *pgx.Conn, n naming.Wo
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("checking for %s: %w", n.Database, err)
 	}
-	if exists && comment != nil && *comment == readyMarker {
+	if exists && isReady(comment) {
 		return nil
 	}
 
@@ -209,7 +236,8 @@ func (p *Provisioner) provision(ctx context.Context, conn *pgx.Conn, n naming.Wo
 		return fmt.Errorf("setting up %s: %w", n.Database, err)
 	}
 
-	if _, err := conn.Exec(ctx, "COMMENT ON DATABASE "+db+" IS "+literal(readyMarker)); err != nil {
+	marker := readyMarker + createdSep + p.opts.Now().UTC().Format(time.RFC3339)
+	if _, err := conn.Exec(ctx, "COMMENT ON DATABASE "+db+" IS "+literal(marker)); err != nil {
 		return fmt.Errorf("marking %s ready: %w", n.Database, err)
 	}
 	log.Printf("provisioned workspace database %s", n.Database) // never the slug: see internal/naming
