@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DatabaseApp } from "../DatabaseApp";
+import { DatabaseApp, NOTEBOOK_SNIPPET, PIPELINE_SNIPPET } from "../DatabaseApp";
 import { formatBytes, formatCreated } from "../format";
 import type { WorkspaceRole } from "../types";
 
@@ -70,7 +70,7 @@ describe("DatabaseApp", () => {
       const { unmount } = mount(role);
       expect(screen.getByText(/visible to its owners/)).toBeInTheDocument();
       // The connect snippet is still useful to everyone.
-      expect(screen.getByText(/booth_database.connect\(\)/)).toBeInTheDocument();
+      expect(screen.getByTestId("snippet-notebook")).toBeInTheDocument();
       await waitFor(() => expect(calls).toHaveLength(1));
       await new Promise((r) => setTimeout(r, 0));
       // Never the owner-only status route, and no error or listing for the normal 403.
@@ -155,6 +155,33 @@ describe("DatabaseApp", () => {
     await screen.findByText("No database yet");
     rerender(<DatabaseApp workspace="globex" role="owner" theme="dark" getAccessToken={() => "t"} />);
     await waitFor(() => expect(calls.map((c) => c.headers.get("X-Workspace"))).toEqual(["acme", "globex"]));
+  });
+});
+
+describe("connect snippet", () => {
+  // Since ADR 0095 the notebook and pipeline-task images don't ship the booth_database client;
+  // the in-cluster path is the credential sidecar's DATABASE_URL.
+  it("never tells anyone to import booth_database", () => {
+    mockFetch({});
+    mount("viewer");
+    const section = screen.getByRole("heading", { name: "Connect from a notebook or pipeline task" }).closest("section")!;
+    expect(section.textContent).not.toContain("booth_database");
+    expect(section.textContent).not.toContain("read_only");
+    expect(NOTEBOOK_SNIPPET).not.toContain("booth_database");
+    expect(PIPELINE_SNIPPET).not.toContain("booth_database");
+  });
+
+  it("shows the notebook and pipeline paths that work today", () => {
+    mockFetch({});
+    mount("viewer");
+    expect(screen.getByTestId("snippet-notebook").textContent).toBe(
+      ["import booth.database, pandas as pd", "", "engine = booth.database.engine()", 'pd.read_sql("SELECT now()", engine)'].join("\n"),
+    );
+    const pipeline = screen.getByTestId("snippet-pipeline").textContent!;
+    expect(pipeline).toContain("import os, psycopg");
+    expect(pipeline).toContain('psycopg.connect(os.environ["DATABASE_URL"])');
+    expect(screen.getByText(/valid for about an hour/)).toBeInTheDocument();
+    expect(screen.getByText(/ends when the credential it opened with expires/)).toBeInTheDocument();
   });
 });
 

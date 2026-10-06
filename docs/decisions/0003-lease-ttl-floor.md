@@ -63,16 +63,28 @@ ruled to stay (option A). **No code change here.**
 - **A session's real bound is the lease it logged in with:** `DefaultMinTTL`, one hour today. A
   newer lease gives *new* connections a fresh hour. It never extends one that's already open,
   because that would mean a credential outliving its expiry, which ADR 0080/0088 forbid.
-- **Through the sidecar, the guarantee is about half a lease.** Once booth-core's half-lifetime
-  renewal ships, the sidecar hands out credentials anywhere between fresh and half-expired. So a
-  connection opened through it is guaranteed only about 30 minutes today. Connections opened
-  directly by `booth_database` get the full lease.
+- **Through the sidecar, the guarantee is about half a lease.** The sidecar renews at half a lease
+  (contracts/credential-sidecar.md), so it hands out credentials anywhere between fresh and
+  half-expired. A connection opened through it is guaranteed only about 30 minutes today.
+  Connections opened directly on a fresh broker lease (this repo's `client/`, which the notebook
+  and task images don't ship) get the full lease.
 - **The sidecar's guarantee is derived from `DefaultMinTTL`.** Changing the default (the
   `DefaultMinTTL` constant or the chart's `leases.minTTL`) goes through the architecture
   coordinator first. Both places now say so.
 - **If a real workload can't live within the guarantee**, that's the signal to revisit whether the
   reaper should spare a session while a newer lease exists for the same principal. That would
   weaken the invariant, so it would need its own ADR, not a change made here.
+
+## Note (2026-10-06): the in-cluster path is the sidecar, not `booth_database`
+
+This record was written when `booth_database` (this repo's `client/`) was the intended in-cluster
+path. Since ADR 0095, notebook servers and pipeline tasks reach the database through booth-core's
+credential sidecar and its `DATABASE_URL`, and their images don't ship `booth_database`. Read the
+`booth_database` / `engine()` mentions above and below as describing that client, which calls the
+broker directly. In a notebook, use booth-notebooks' `booth.database.engine()`. In a task, use any
+Postgres client on `DATABASE_URL`, for example psycopg 3, which booth-pipeline's task image ships.
+Whether `client/` stays is a pending architecture decision. The reasoning for the one-hour floor is
+unaffected.
 
 ## Client follow-through
 

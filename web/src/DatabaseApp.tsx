@@ -182,21 +182,44 @@ function NotOwner() {
   );
 }
 
+// The in-cluster path since ADR 0095: booth-core's credential sidecar sets DATABASE_URL (a
+// credential-free loopback proxy) in notebook and pipeline-task pods. Neither image ships this repo's
+// booth_database client, so the snippets use only what those images really have: booth-notebooks'
+// `booth.database` and pandas in a notebook; psycopg (3) in booth-pipeline's task image.
+export const NOTEBOOK_SNIPPET = `import booth.database, pandas as pd
+
+engine = booth.database.engine()
+pd.read_sql("SELECT now()", engine)`;
+
+export const PIPELINE_SNIPPET = `import os, psycopg
+
+with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+    conn.execute("SELECT now()").fetchone()`;
+
+const preClass = "overflow-x-auto rounded-lg bg-slate-100 p-3 font-mono text-xs text-slate-800 dark:bg-slate-900 dark:text-slate-200";
+
 function ConnectSnippet() {
   return (
     <section aria-labelledby="connect" className="flex flex-col gap-2">
       <h2 id="connect" className="text-sm font-semibold">
         Connect from a notebook or pipeline task
       </h2>
-      <pre className="overflow-x-auto rounded-lg bg-slate-100 p-3 font-mono text-xs text-slate-800 dark:bg-slate-900 dark:text-slate-200">
-        {`import booth_database
-
-with booth_database.connect() as conn:            # editors and owners
-    conn.execute("SELECT 1")
-
-booth_database.connect(read_only=True)            # any workspace role`}
+      <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">In a notebook</h3>
+      <pre data-testid="snippet-notebook" className={preClass}>
+        {NOTEBOOK_SNIPPET}
       </pre>
-      <p className="text-xs text-slate-500 dark:text-slate-400">No password to manage: each connection gets its own credential, valid for about an hour.</p>
+      <h3 className="text-xs font-medium text-slate-600 dark:text-slate-300">In a pipeline task with platform access</h3>
+      <pre data-testid="snippet-pipeline" className={preClass}>
+        {PIPELINE_SNIPPET}
+      </pre>
+      <ul className="list-disc space-y-1 pl-4 text-xs text-slate-500 dark:text-slate-400">
+        <li>No password to manage: a credential sidecar provides DATABASE_URL, and each connection gets its own credential, valid for about an hour.</li>
+        <li>
+          A connection ends when the credential it opened with expires, even after renewal, and is guaranteed only about half that (around 30 minutes). Reconnect for longer
+          work; booth.database.engine() does this for you between queries. A query still running at expiry is lost.
+        </li>
+        <li>Access follows your workspace role when the notebook server or task starts: owners and editors can read and write, viewers can only read.</li>
+      </ul>
     </section>
   );
 }

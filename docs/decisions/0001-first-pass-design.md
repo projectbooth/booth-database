@@ -20,6 +20,10 @@ cross-cutting change; each is flagged so it can be ratified or overturned, not q
   deliberately **no** `database:` field (that's ADR 0053's module-internal Postgres).
 - **Python client** (`client/`, package `booth-database-client`, import `booth_database`):
   `booth_database.connect()`, `connect(read_only=True)`, `url()`, `engine()`, `credentials()`.
+  **Note (2026-10-06):** no longer the in-cluster path. Since ADR 0095, notebooks and pipeline
+  tasks use booth-core's credential sidecar (`DATABASE_URL`), and their images don't ship this
+  client. Access there follows the workspace role at start, with no `read_only` switch. See the
+  README. Whether `client/` stays is a pending architecture decision.
 
 ## §1 Judgment call: database per workspace, not schema per workspace
 

@@ -2,22 +2,34 @@
 
 Project Booth's optional workspace database (ADR 0081): one real PostgreSQL database per workspace,
 on a bundled server or one you run, reached by a workspace's own code (notebooks, pipeline tasks)
-with a single call and no password to handle:
+with no password to handle.
+
+**In the cluster, the path is booth-core's credential sidecar (ADR 0095).** It runs beside each
+notebook server and pipeline task, gets short-lived credentials from the broker on the pod's own
+identity, and sets `DATABASE_URL=postgresql://localhost:5432/<db>`, a loopback proxy with no
+credential in it. The notebook and task images don't ship this repo's `booth_database` client; use
+what they do ship:
 
 ```python
-import booth_database
+# In a notebook (booth-notebooks' `booth` package):
+import booth.database, pandas as pd
+engine = booth.database.engine()
+pd.read_sql("SELECT now()", engine)
 
-with booth_database.connect() as conn:                    # read-write: editor/owner
-    conn.execute("CREATE TABLE IF NOT EXISTS notes (id serial PRIMARY KEY, body text)")
-    conn.execute("INSERT INTO notes (body) VALUES (%s)", ["hello"])
-
-booth_database.connect(read_only=True)                    # any workspace role
-pandas.read_sql("SELECT * FROM notes", booth_database.url())
-df.to_sql("notes_copy", booth_database.engine())           # SQLAlchemy; renews credentials itself
+# In a pipeline task with platform access (booth-pipeline's task image ships psycopg 3):
+import os, psycopg
+with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+    conn.execute("SELECT now()").fetchone()
 ```
 
-Each call asks booth-core's credential broker (ADR 0080/0088) for a `postgres` credential good for a
-short time (one hour by default: booth-database's lease floor, ADR 0089), for this workspace's database only, as the caller's own identity. This module is the
+- **Access follows the workspace role** of the person or run when the notebook server or task
+  starts. Owners and editors get read-write; viewers get read-only. That's the sidecar's `--access`,
+  set by the consuming module, and there is no per-connection read-only switch.
+- **Connections can end at lease expiry.** See "Sessions, renewal and the sidecar" below.
+
+Behind the sidecar, each lease is a `postgres` credential from booth-core's credential broker
+(ADR 0080/0088), good for a short time (one hour by default: booth-database's lease floor,
+ADR 0089), for this workspace's database only, as the caller's own identity. This module is the
 broker's `postgres`-kind **provider**: it mints a fresh short-lived login role per request and never
 hands out its own admin credential. Design, trade-offs and open items:
 [`docs/decisions/0001-first-pass-design.md`](docs/decisions/0001-first-pass-design.md).
@@ -36,7 +48,7 @@ field.
 | `internal/api`, `internal/auth` | Read-only admin API for the native view (ADR 0093), with OIDC and ADR 0041 role derivation |
 | `web/` | `@projectbooth/database-ui`, the native admin view |
 | `charts/booth-database` | Helm chart: `mode: bundled` or `mode: external`, backup CronJob, `BoothModule` |
-| `client/` | `booth-database-client` (Python, `import booth_database`) |
+| `client/` | `booth-database-client` (Python, `import booth_database`), which calls the broker directly. Not shipped in the notebook or task images and not the in-cluster path (that's the sidecar, above); whether it stays is a pending architecture decision |
 | `test/contract`, `test/integration`, `hack/` | Chart contract tests, kind-cluster integration |
 
 ## Install
@@ -86,20 +98,25 @@ clamps every shorter request **up to its floor, `leases.minTTL` (default 1 hour)
 mechanism booth-storage uses for MinIO's 15-minute floor (ADR 0089 §3). `expiresAt` in the response
 is always the real expiry. A credential stops authenticating at `expiresAt`, and any session still
 open on it is ended within `leases.reapInterval` (default 10s). So **no single session outlives its
-credential (one hour by default)**: longer work should open new connections, which `engine()`
-does for you. Why one hour: docs/decisions/0003.
+credential (one hour by default)**: longer work should open new connections, which
+`booth.database.engine()` does between queries in a notebook. Why one hour: docs/decisions/0003.
+
+### Sessions, renewal and the sidecar
 
 **A session's real bound is the lease it opened with, and renewing doesn't extend it.** A session
-belongs to the credential it logged in with. Fetching a newer credential, for example through
-booth-core's credential sidecar, gives *new* connections a fresh lease, but the reaper still ends
-an *existing* session when *its own* lease expires. This is deliberate: ADR 0080/0088's "a
-credential dies at expiry" invariant, upheld by ADR 0095's fifth amendment. So:
+belongs to the credential it logged in with. A newer credential, such as the sidecar's renewal,
+gives *new* connections a fresh lease, but the reaper still ends an *existing* session when *its
+own* lease expires. This is deliberate: ADR 0080/0088's "a credential dies at expiry" invariant,
+upheld by ADR 0095's fifth amendment. So:
 
-- **Opened directly** (`booth_database.connect()` / `engine()`): a connection is guaranteed up to
-  the full lease, `DefaultMinTTL`, one hour today.
-- **Opened through the sidecar:** once booth-core's half-lifetime renewal ships, a connection is
-  guaranteed only about **half** a lease, roughly 30 minutes today. A connection may be opened on a
-  credential that's already halfway to expiry.
+- **Through the sidecar (`DATABASE_URL`, the in-cluster path):** the sidecar renews at half a
+  lease (contracts/credential-sidecar.md), so a connection may open on a credential that's already
+  halfway to expiry. A connection is guaranteed only about **half** a lease, roughly 30 minutes
+  today, and at most a full lease. Use a pool with liveness checks that recycles inside that window;
+  `booth.database.engine()` does. A query or transaction running at expiry is lost.
+- **Directly from the broker** (this repo's `client/`, outside the notebook and task images): a
+  connection opened on a fresh lease is guaranteed up to the full lease, `DefaultMinTTL`, one hour
+  today.
 
 The sidecar's guarantee is derived from `DefaultMinTTL` (`leases.minTTL`). Changing that default
 changes what consumers can rely on, so it goes through the architecture coordinator first.
