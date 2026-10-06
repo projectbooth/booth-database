@@ -7,8 +7,10 @@
 # instance and never declares the manifest's `database` field.
 #
 # The only way in is a short-lived credential minted through booth-core's credential broker
-# (ADR 0080/0088): `POST /api/credentials {kind: "postgres", ...}` — or, from code,
-# `booth_database.connect()` (client/). Nobody is ever handed a long-lived password.
+# (ADR 0080/0088): `POST /api/credentials {kind: "postgres", ...}`. In notebook and pipeline-task
+# pods, booth-core's credential sidecar (ADR 0095) makes that call and exposes the database as
+# DATABASE_URL, a credential-free loopback address (`booth.database.engine()` in a notebook; any
+# Postgres client such as psycopg in a task). Nobody is ever handed a long-lived password.
 
 replicaCount: 1
 
