@@ -96,6 +96,9 @@ leases:
   # this is also the longest any one connection can live. One hour = booth-pipeline's default task
   # timeout and booth-notebooks' default idle-cull window (docs/decisions/0003). It is also how
   # long a leaked credential stays usable, so raise it deliberately, not casually.
+  # It is the hard bound on any one session (renewing doesn't extend an open session; ADR 0095
+  # fifth amendment), and booth-core's credential sidecar guarantees its consumers only about half
+  # of it. Changing the chart default goes through the architecture coordinator first (README).
   minTTL: 1h
   # Cap on a lease's lifetime on this side. Empty = the floor, i.e. every lease lives exactly
   # minTTL. Only matters if booth-core's broker ceiling is ever raised above the floor.

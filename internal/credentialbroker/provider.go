@@ -87,6 +87,12 @@ type Deps struct {
 // default idle-cull window (cullIdleSeconds: 3600), so a default-configured task can hold one
 // connection for its whole run and a notebook connection lasts as long as the server it lives in
 // would stay up idle.
+//
+// It is also the hard bound on any one session: the reaper ends a session when the lease it logged
+// in with expires, even if a newer lease has since been issued (ADR 0095 fifth amendment upholds
+// that). booth-core's credential sidecar derives its connection guarantee from this value (about
+// half of it, once its half-lifetime renewal ships). DO NOT change this default without telling the
+// architecture coordinator first: consumers' guarantees move with it.
 const DefaultMinTTL = time.Hour
 
 // NewHandler builds the provider endpoint. Not behind any OIDC middleware: the only caller is

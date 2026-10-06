@@ -54,6 +54,26 @@ One hour sits at the point where the platform's own defaults already draw that l
   data"; large analytical work belongs in booth-lakehouse). An operator with a real need can raise
   `leases.minTTL`, which is the documented knob.
 
+## Addendum (2026-10-06): sessions, renewal and the sidecar (ADR 0095 fifth amendment)
+
+booth-pipeline and booth-notebooks reported that the reaper ends an open session at its lease's
+expiry even when booth-core's credential sidecar has already renewed. That's intended, and it was
+ruled to stay (option A). **No code change here.**
+
+- **A session's real bound is the lease it logged in with:** `DefaultMinTTL`, one hour today. A
+  newer lease gives *new* connections a fresh hour. It never extends one that's already open,
+  because that would mean a credential outliving its expiry, which ADR 0080/0088 forbid.
+- **Through the sidecar, the guarantee is about half a lease.** Once booth-core's half-lifetime
+  renewal ships, the sidecar hands out credentials anywhere between fresh and half-expired. So a
+  connection opened through it is guaranteed only about 30 minutes today. Connections opened
+  directly by `booth_database` get the full lease.
+- **The sidecar's guarantee is derived from `DefaultMinTTL`.** Changing the default (the
+  `DefaultMinTTL` constant or the chart's `leases.minTTL`) goes through the architecture
+  coordinator first. Both places now say so.
+- **If a real workload can't live within the guarantee**, that's the signal to revisit whether the
+  reaper should spare a session while a newer lease exists for the same principal. That would
+  weaken the invariant, so it would need its own ADR, not a change made here.
+
 ## Client follow-through
 
 `booth_database` still *asks* for 300s (the broker's ceiling; asking for more is clamped down

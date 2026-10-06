@@ -89,6 +89,21 @@ open on it is ended within `leases.reapInterval` (default 10s). So **no single s
 credential (one hour by default)**: longer work should open new connections, which `engine()`
 does for you. Why one hour: docs/decisions/0003.
 
+**A session's real bound is the lease it opened with, and renewing doesn't extend it.** A session
+belongs to the credential it logged in with. Fetching a newer credential, for example through
+booth-core's credential sidecar, gives *new* connections a fresh lease, but the reaper still ends
+an *existing* session when *its own* lease expires. This is deliberate: ADR 0080/0088's "a
+credential dies at expiry" invariant, upheld by ADR 0095's fifth amendment. So:
+
+- **Opened directly** (`booth_database.connect()` / `engine()`): a connection is guaranteed up to
+  the full lease, `DefaultMinTTL`, one hour today.
+- **Opened through the sidecar:** once booth-core's half-lifetime renewal ships, a connection is
+  guaranteed only about **half** a lease, roughly 30 minutes today. A connection may be opened on a
+  credential that's already halfway to expiry.
+
+The sidecar's guarantee is derived from `DefaultMinTTL` (`leases.minTTL`). Changing that default
+changes what consumers can rely on, so it goes through the architecture coordinator first.
+
 ## Admin view (ADR 0093)
 
 A read-only native view under **Manage** (`navPath: /database`), published as
