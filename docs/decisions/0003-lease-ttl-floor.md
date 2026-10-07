@@ -83,7 +83,7 @@ credential sidecar and its `DATABASE_URL`, and their images don't ship `booth_da
 `booth_database` / `engine()` mentions above and below as describing that client, which calls the
 broker directly. In a notebook, use booth-notebooks' `booth.database.engine()`. In a task, use any
 Postgres client on `DATABASE_URL`, for example psycopg 3, which booth-pipeline's task image ships.
-Whether `client/` stays is a pending architecture decision. The reasoning for the one-hour floor is
+ADR 0098 (2026-10-07) ruled that `client/` stays, for out-of-cluster use only. The reasoning for the one-hour floor is
 unaffected.
 
 ## Client follow-through

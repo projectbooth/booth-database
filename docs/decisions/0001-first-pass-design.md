@@ -23,7 +23,7 @@ cross-cutting change; each is flagged so it can be ratified or overturned, not q
   **Note (2026-10-06):** no longer the in-cluster path. Since ADR 0095, notebooks and pipeline
   tasks use booth-core's credential sidecar (`DATABASE_URL`), and their images don't ship this
   client. Access there follows the workspace role at start, with no `read_only` switch. See the
-  README. Whether `client/` stays is a pending architecture decision.
+  README. ADR 0098 (2026-10-07) ruled: `client/` stays, for out-of-cluster use only.
 
 ## §1 Judgment call: database per workspace, not schema per workspace
 
