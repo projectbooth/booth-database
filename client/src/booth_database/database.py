@@ -1,4 +1,5 @@
-"""The workspace database, as simple commands: ``connect()``, ``url()``, ``engine()``.
+"""The workspace database, as simple commands: ``connect()``, ``url()``, ``engine()``, for use from
+outside the cluster only (ADR 0098). In-cluster code uses the credential sidecar's DATABASE_URL instead.
 
 Every call asks the credential broker for a fresh short-lived credential (ADR 0080) for *this*
 workspace's database, as *this* caller, and uses it immediately. A credential lives for
@@ -37,7 +38,7 @@ class Database:
         opener=None,
     ) -> None:
         if not workspace:
-            raise DatabaseError("no workspace: set BOOTH_WORKSPACE, or run inside a Project Booth notebook")
+            raise DatabaseError("no workspace: set BOOTH_WORKSPACE (this client is for use outside the cluster; in-cluster code uses DATABASE_URL)")
         self.workspace = workspace
         self._token = token if callable(token) else (lambda: token)
         self._ttl = int(ttl_seconds)
@@ -45,15 +46,18 @@ class Database:
 
     @classmethod
     def from_env(cls, env=None, **kwargs) -> Database:
-        """Configured from what a platform workload already has: ``BOOTH_WORKSPACE``,
-        ``BOOTH_CREDENTIAL_BROKER_URL`` (or ``BOOTH_GATEWAY_URL``, from which it is derived), and a
-        token from ``BOOTH_TOKEN`` or — inside a booth-notebooks kernel — the notebook's own
-        platform token (``booth.platform_token``). The same variables booth_lakehouse reads."""
+        """Configured from the environment: ``BOOTH_WORKSPACE``, ``BOOTH_CREDENTIAL_BROKER_URL`` (or
+        ``BOOTH_GATEWAY_URL``, from which it is derived) and ``BOOTH_TOKEN``, a platform token of yours.
+
+        If ``BOOTH_TOKEN`` is unset and booth-notebooks' ``booth`` package happens to be importable,
+        its ``platform_token`` is used. That fallback predates ADR 0098 and is kept only so nothing
+        changes behaviour; it is not a supported in-cluster path. Inside the cluster, use the
+        credential sidecar's ``DATABASE_URL`` instead of this package."""
         env = os.environ if env is None else env
         notebook = _notebook()
         token: Callable[[], str] | str | None = env.get("BOOTH_TOKEN") or (notebook[0] if notebook else None)
         if not token:
-            raise DatabaseError("no platform token: set BOOTH_TOKEN, or run inside a Project Booth notebook")
+            raise DatabaseError("no platform token: set BOOTH_TOKEN (this client is for use outside the cluster; in-cluster code uses DATABASE_URL)")
         workspace = env.get("BOOTH_WORKSPACE") or (notebook[1] if notebook else "")
         return cls(broker_url_from_env(env), workspace, token, **kwargs)
 
@@ -135,8 +139,9 @@ def broker_url_from_env(env) -> str:
 
 
 def _notebook() -> tuple[Callable[[], str], str] | None:
-    """Inside a booth-notebooks kernel, the notebook's own platform identity via its ``booth``
-    package's public ``platform_token`` (ADR 0084) — never the person's browser login."""
+    """booth-notebooks' ``booth.platform_token`` when that package is importable (ADR 0084). A
+    pre-ADR-0098 fallback kept for compatibility, not a supported in-cluster path: notebooks use
+    the credential sidecar's DATABASE_URL (``booth.database.engine()``)."""
     try:
         import booth  # type: ignore[import-not-found]
     except ImportError:

@@ -48,7 +48,7 @@ field.
 | `internal/api`, `internal/auth` | Read-only admin API for the native view (ADR 0093), with OIDC and ADR 0041 role derivation |
 | `web/` | `@projectbooth/database-ui`, the native admin view |
 | `charts/booth-database` | Helm chart: `mode: bundled` or `mode: external`, backup CronJob, `BoothModule` |
-| `client/` | `booth-database-client` (Python, `import booth_database`), which calls the broker directly. Not shipped in the notebook or task images and not the in-cluster path (that's the sidecar, above); whether it stays is a pending architecture decision |
+| `client/` | `booth-database-client` (Python, `import booth_database`), which calls the broker directly. **For use outside the cluster only** (ADR 0098); in-cluster code uses the sidecar's `DATABASE_URL` (above). Not verified end to end from outside a cluster: see [`client/README.md`](client/README.md) |
 | `test/contract`, `test/integration`, `hack/` | Chart contract tests, kind-cluster integration |
 
 ## Install
@@ -114,7 +114,7 @@ upheld by ADR 0095's fifth amendment. So:
   halfway to expiry. A connection is guaranteed only about **half** a lease, roughly 30 minutes
   today, and at most a full lease. Use a pool with liveness checks that recycles inside that window;
   `booth.database.engine()` does. A query or transaction running at expiry is lost.
-- **Directly from the broker** (this repo's `client/`, outside the notebook and task images): a
+- **Directly from the broker** (this repo's `client/`, out-of-cluster use only, ADR 0098): a
   connection opened on a fresh lease is guaranteed up to the full lease, `DefaultMinTTL`, one hour
   today.
 

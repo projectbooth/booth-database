@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "booth-database-client"
 version = "0.1.0"
-description = "Your Project Booth workspace's PostgreSQL database in one line: booth_database.connect(), with a short-lived credential from the ADR 0080 credential broker."
+description = "A Project Booth workspace's PostgreSQL database from outside the cluster (ADR 0098): booth_database.connect(), with a short-lived credential from the ADR 0080 credential broker. In-cluster code uses the credential sidecar's DATABASE_URL instead."
 requires-python = ">=3.10"
 # psycopg is the driver connect() returns a connection from. Imported lazily, so url()/credentials()
 # and the tests work without it; SQLAlchemy is used by engine() when present, never required.
