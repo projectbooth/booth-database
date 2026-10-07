@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   go:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -55,7 +55,7 @@ jobs:
         run: docker compose -f hack/docker-compose.yml logs --tail=100
 
   client:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: client
@@ -83,7 +83,7 @@ jobs:
 
   web:
     # @projectbooth/database-ui (ADR 0093): the admin view's native UI package.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
@@ -101,7 +101,7 @@ jobs:
       - run: npm run build
 
   helm-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
@@ -112,7 +112,7 @@ jobs:
 
   image:
     # Catches a broken Dockerfile on the PR that breaks it. Not pushed.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t booth-database:ci .
