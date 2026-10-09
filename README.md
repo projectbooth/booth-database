@@ -139,6 +139,15 @@ Its API verifies the caller's token itself (ADR 0041), so set `oidc.issuerUrl`/`
 the same provider and client booth-core uses. Unset, the view's API answers 503 and credential
 issuance is unaffected. Design and judgment calls: docs/decisions/0004 and 0005.
 
+**Key-fetch override (`oidc.jwksUrl`, env `BOOTH_OIDC_JWKS_URL`, ADR 0108).** Optional, default
+empty, which means signing keys come from `oidc.issuerUrl`'s discovery document as before. When
+set, typically to Keycloak's in-cluster Service over plain http on a bundled install, keys are
+fetched from that URL directly, discovery is skipped, and a token's `iss` must still equal
+`oidc.issuerUrl` exactly. Setting it without `oidc.issuerUrl` stops the service at startup, and the
+effective issuer and key source are logged once at startup. Trust assumption: the key fetch is
+in-cluster, unauthenticated and unencrypted, so it relies on NetworkPolicy and cluster trust to stop
+anyone substituting keys on the way.
+
 ## Backup and restore (bundled mode)
 
 A CronJob (`backup.schedule`, default nightly) writes `/backups/<UTC timestamp>/` on the StatefulSet's

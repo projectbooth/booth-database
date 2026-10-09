@@ -149,6 +149,12 @@ func Load() (Config, error) {
 		ClientID:        os.Getenv("BOOTH_OIDC_CLIENT_ID"),
 		RequireAudience: os.Getenv("BOOTH_OIDC_REQUIRE_AUDIENCE") == "true",
 		GroupsClaim:     getEnv("BOOTH_OIDC_GROUPS_CLAIM", auth.DefaultGroupsClaim),
+		JWKSURL:         os.Getenv("BOOTH_OIDC_JWKS_URL"),
+	}
+	// ADR 0108: the key-fetch override never replaces the issuer, which `iss` is still checked
+	// against, so naming one without the other is a configuration error, not "admin view off".
+	if cfg.OIDC.JWKSURL != "" && cfg.OIDC.IssuerURL == "" {
+		return Config{}, fmt.Errorf("BOOTH_OIDC_JWKS_URL is set but BOOTH_OIDC_ISSUER_URL is empty: the issuer is still required to validate `iss`")
 	}
 	if cfg.OIDC.IssuerURL != "" && cfg.OIDC.ClientID == "" {
 		return Config{}, fmt.Errorf("BOOTH_OIDC_CLIENT_ID is required when BOOTH_OIDC_ISSUER_URL is set")

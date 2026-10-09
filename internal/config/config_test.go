@@ -139,3 +139,21 @@ func TestLoad_AdminView(t *testing.T) {
 		t.Error("the retired operator-workspace allowlist was accepted")
 	}
 }
+
+// ADR 0108's key-fetch override.
+func TestLoad_JWKSURL(t *testing.T) {
+	setBase(t)
+	if cfg, err := Load(); err != nil || cfg.OIDC.JWKSURL != "" {
+		t.Fatalf("default must be empty (discovery): %+v %v", cfg.OIDC, err)
+	}
+	t.Setenv("BOOTH_OIDC_JWKS_URL", "http://keycloak.booth-system.svc:8080/realms/booth/protocol/openid-connect/certs")
+	if _, err := Load(); err == nil {
+		t.Error("BOOTH_OIDC_JWKS_URL without BOOTH_OIDC_ISSUER_URL must be a startup error")
+	}
+	t.Setenv("BOOTH_OIDC_ISSUER_URL", "https://booth.example/realms/booth")
+	t.Setenv("BOOTH_OIDC_CLIENT_ID", "booth-database")
+	cfg, err := Load()
+	if err != nil || cfg.OIDC.JWKSURL != "http://keycloak.booth-system.svc:8080/realms/booth/protocol/openid-connect/certs" || cfg.OIDC.IssuerURL != "https://booth.example/realms/booth" {
+		t.Fatalf("cfg=%+v err=%v", cfg.OIDC, err)
+	}
+}
