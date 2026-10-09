@@ -384,3 +384,20 @@ func TestChart_TTLFloor(t *testing.T) {
 		t.Error("BOOTH_DATABASE_MAX_TTL rendered by default; it should fall back to the floor")
 	}
 }
+
+// ADR 0108: oidc.jwksUrl is passed through when set and absent by default (discovery).
+func TestChart_JWKSURLPassthrough(t *testing.T) {
+	requireHelm(t)
+	if strings.Contains(string(helmTemplate(t, "--set", "oidc.issuerUrl=https://booth.example/realms/booth", "--set", "oidc.clientId=booth-database")), "BOOTH_OIDC_JWKS_URL") {
+		t.Error("BOOTH_OIDC_JWKS_URL rendered without oidc.jwksUrl set")
+	}
+	const jwks = "http://keycloak.booth-system.svc:8080/realms/booth/protocol/openid-connect/certs"
+	s := string(helmTemplate(t, "--set", "oidc.issuerUrl=https://booth.example/realms/booth", "--set", "oidc.clientId=booth-database", "--set", "oidc.jwksUrl="+jwks))
+	if !strings.Contains(s, "BOOTH_OIDC_JWKS_URL") || !strings.Contains(s, `value: "`+jwks+`"`) {
+		t.Error("oidc.jwksUrl not passed through as BOOTH_OIDC_JWKS_URL")
+	}
+	// Without an issuer it still renders, so the service's startup check refuses it loudly.
+	if !strings.Contains(string(helmTemplate(t, "--set", "oidc.jwksUrl="+jwks)), "BOOTH_OIDC_JWKS_URL") {
+		t.Error("oidc.jwksUrl without an issuer was silently dropped")
+	}
+}

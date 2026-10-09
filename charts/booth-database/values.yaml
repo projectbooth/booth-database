@@ -33,6 +33,12 @@ oidc:
   requireAudience: true
   # Must match booth-core's BOOTH_OIDC_GROUPS_CLAIM (ADR 0025).
   groupsClaim: groups
+  # Optional key-fetch override (ADR 0108). Empty: signing keys come from issuerUrl's discovery
+  # document, as before. Set (e.g. Keycloak's in-cluster Service over plain http on a bundled
+  # install): keys are fetched from this URL directly, discovery is skipped, and `iss` is still
+  # checked exactly against issuerUrl. Requires issuerUrl. The fetch is unauthenticated, so it relies
+  # on NetworkPolicy and cluster trust (README).
+  jwksUrl: ""
 
 # "bundled": this chart runs its own PostgreSQL StatefulSet (below), distinct from booth-core's.
 # "external": point at a PostgreSQL-compatible cluster you run yourself (`external:` below).

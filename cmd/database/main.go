@@ -106,7 +106,6 @@ func run() error {
 				v, err := auth.NewVerifier(ctx, cfg.OIDC)
 				if err == nil {
 					verifier.Store(v)
-					log.Printf("admin API: verifying tokens against %s", cfg.OIDC.IssuerURL)
 					return
 				}
 				log.Printf("admin API: OIDC discovery failed (%v); retrying", err)

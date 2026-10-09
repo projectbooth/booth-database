@@ -144,3 +144,68 @@ func TestIsPlatformOperator(t *testing.T) {
 		}
 	}
 }
+
+// ADR 0108's key-fetch override: keys from a plain-http JWKS URL, `iss` still checked exactly
+// against the configured issuer, which is never contacted (here it isn't even reachable).
+func TestVerifier_JWKSURLOverride(t *testing.T) {
+	ctx := context.Background()
+	keys := authtest.New(t) // serves the signing keys over plain http at keys.JWKSURL
+	const issuer = "https://keycloak.unreachable.invalid/realms/booth"
+
+	v, err := auth.NewVerifier(ctx, auth.OIDCConfig{IssuerURL: issuer, ClientID: "booth-database", JWKSURL: keys.JWKSURL})
+	if err != nil {
+		t.Fatalf("NewVerifier must not need the (unreachable) issuer: %v", err)
+	}
+
+	good := keys.Mint(t, authtest.Token{Issuer: issuer, Subject: "alice", Groups: []string{"/workspaces/acme/owner"}})
+	c, err := v.Verify(ctx, good)
+	if err != nil || c.Subject != "alice" || len(c.Groups) != 1 {
+		t.Fatalf("a valid token for the configured issuer: claims=%+v err=%v", c, err)
+	}
+
+	// Same key, different `iss`: still rejected. The override changes where keys come from, not
+	// which issuer is trusted.
+	for _, iss := range []string{keys.URL, issuer + "/", "https://keycloak.unreachable.invalid/realms/other"} {
+		if _, err := v.Verify(ctx, keys.Mint(t, authtest.Token{Issuer: iss, Subject: "alice"})); err == nil {
+			t.Errorf("token with iss=%q accepted", iss)
+		}
+	}
+	// A key the JWKS doesn't publish: rejected.
+	other, _ := rsa.GenerateKey(rand.Reader, 2048)
+	if _, err := v.Verify(ctx, keys.Mint(t, authtest.Token{Issuer: issuer, Subject: "alice", SignWith: other})); err == nil {
+		t.Error("token signed by an unpublished key accepted")
+	}
+	if n := keys.DiscoveryHits.Load(); n != 0 {
+		t.Errorf("discovery contacted %d times with jwksUrl set", n)
+	}
+}
+
+// With jwksUrl set, discovery is never contacted even when the issuer is reachable and serves it.
+func TestVerifier_JWKSURLSkipsDiscovery(t *testing.T) {
+	ctx := context.Background()
+	idp := authtest.New(t)
+	v, err := auth.NewVerifier(ctx, auth.OIDCConfig{IssuerURL: idp.URL, ClientID: "booth-database", JWKSURL: idp.JWKSURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Verify(ctx, idp.Mint(t, authtest.Token{Subject: "alice"})); err != nil {
+		t.Fatalf("valid token: %v", err)
+	}
+	if n := idp.DiscoveryHits.Load(); n != 0 {
+		t.Errorf("discovery contacted %d times with jwksUrl set", n)
+	}
+
+	// Unset: today's behaviour, discovery.
+	if _, err := auth.NewVerifier(ctx, auth.OIDCConfig{IssuerURL: idp.URL, ClientID: "booth-database"}); err != nil {
+		t.Fatal(err)
+	}
+	if idp.DiscoveryHits.Load() == 0 {
+		t.Error("without jwksUrl, discovery should be used")
+	}
+}
+
+func TestVerifier_JWKSURLRequiresIssuer(t *testing.T) {
+	if _, err := auth.NewVerifier(context.Background(), auth.OIDCConfig{JWKSURL: "http://keycloak.booth-system.svc:8080/realms/booth/protocol/openid-connect/certs"}); err == nil {
+		t.Fatal("jwksUrl without an issuer accepted")
+	}
+}

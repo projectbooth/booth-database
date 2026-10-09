@@ -62,6 +62,10 @@ type OIDCConfig struct {
 	// GroupsClaim names the claim carrying workspace memberships; must match booth-core's.
 	// Empty means "groups".
 	GroupsClaim string
+	// JWKSURL, if set, is where signing keys are fetched from instead of discovery (ADR 0108's
+	// key-fetch override, e.g. Keycloak's in-cluster Service over plain http on a bundled install).
+	// `iss` is still validated exactly against IssuerURL. Empty means discovery, as before.
+	JWKSURL string
 }
 
 // DefaultGroupsClaim matches booth-core's default (ADR 0025).
@@ -74,19 +78,35 @@ type Verifier struct {
 }
 
 // NewVerifier runs OIDC discovery against the issuer.
+//
+// With cfg.JWKSURL set (ADR 0108), discovery is skipped entirely: keys are fetched directly from
+// that URL (oidc.NewRemoteKeySet, lazily, on first use) and `iss` is still validated exactly against
+// cfg.IssuerURL. Only where keys come from changes. Same shape as booth-core's
+// internal/auth/oidc.go. Empty JWKSURL runs the discovery path exactly as before.
 func NewVerifier(ctx context.Context, cfg OIDCConfig) (*Verifier, error) {
-	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
-	if err != nil {
-		return nil, fmt.Errorf("oidc discovery against %s: %w", cfg.IssuerURL, err)
+	if cfg.JWKSURL != "" && cfg.IssuerURL == "" {
+		return nil, fmt.Errorf("oidc.jwksUrl is set but oidc.issuerUrl is empty: the issuer is still required to validate `iss`")
+	}
+	verifierCfg := &oidc.Config{SkipClientIDCheck: !cfg.RequireAudience, ClientID: cfg.ClientID}
+	var idTokenVerifier *oidc.IDTokenVerifier
+	keysFrom := "discovery (" + cfg.IssuerURL + "/.well-known/openid-configuration)"
+	if cfg.JWKSURL != "" {
+		idTokenVerifier = oidc.NewVerifier(cfg.IssuerURL, oidc.NewRemoteKeySet(ctx, cfg.JWKSURL), verifierCfg)
+		keysFrom = cfg.JWKSURL
+	} else {
+		provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
+		if err != nil {
+			return nil, fmt.Errorf("oidc discovery against %s: %w", cfg.IssuerURL, err)
+		}
+		idTokenVerifier = provider.Verifier(verifierCfg)
 	}
 	claim := cfg.GroupsClaim
 	if claim == "" {
 		claim = DefaultGroupsClaim
 	}
-	return &Verifier{
-		verifier:    provider.Verifier(&oidc.Config{SkipClientIDCheck: !cfg.RequireAudience, ClientID: cfg.ClientID}),
-		groupsClaim: claim,
-	}, nil
+	// Logged once per successful construction, which main does once at startup. Never a token.
+	log.Printf("oidc: verifying tokens with issuer=%s keys-from=%s", cfg.IssuerURL, keysFrom)
+	return &Verifier{verifier: idTokenVerifier, groupsClaim: claim}, nil
 }
 
 // Verify checks signature, issuer, expiry and (when configured) audience, then reads the groups

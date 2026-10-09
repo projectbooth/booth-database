@@ -116,6 +116,12 @@ spec:
             - name: BOOTH_OIDC_GROUPS_CLAIM
               value: {{ $.Values.oidc.groupsClaim | quote }}
             {{- end }}
+            {{- with .Values.oidc.jwksUrl }}
+            # ADR 0108 key-fetch override. Rendered on its own, not inside the issuer block, so a
+            # jwksUrl without an issuerUrl reaches the service and fails its startup check loudly.
+            - name: BOOTH_OIDC_JWKS_URL
+              value: {{ . | quote }}
+            {{- end }}
             - name: BOOTH_DATABASE_MIN_TTL
               value: {{ .Values.leases.minTTL | quote }}
             {{- with .Values.leases.maxTTL }}
