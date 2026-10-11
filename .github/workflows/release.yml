@@ -1,0 +1,79 @@
+name: Release
+
+# ADR 0111: one release mechanism for every deployable repo. Pushing a `vX.Y.Z` tag publishes the
+# server image and the Helm chart at that same version, so an install (by hand, or through
+# booth-core's install API from booth-module-store's bundled catalog) pins a real, versioned
+# build:
+#   - image  ghcr.io/projectbooth/booth-database:X.Y.Z (and :latest, never used by an install);
+#   - chart  booth-database-X.Y.Z.tgz, attached to the GitHub release and pushed as the OCI
+#     artifact oci://ghcr.io/projectbooth/charts/booth-database at version X.Y.Z.
+# The chart's image.repository is already ghcr.io/projectbooth/booth-database and its tag
+# defaults to appVersion, so packaging with --app-version pins the image to match.
+#
+# Modelled on booth-storage's release.yml plus booth-core's OCI push. This repo ships one image:
+# test/integration/Dockerfile is test-only, and the bundled PostgreSQL is upstream
+# postgres:16-alpine. The `database-ui-v*` tags (publish.yml, the npm UI package) don't match the
+# trigger below.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/projectbooth/booth-database:${{ steps.version.outputs.version }}
+            ghcr.io/projectbooth/booth-database:latest
+
+  chart:
+    needs: image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Package chart at the release version
+        working-directory: charts/booth-database
+        run: |
+          helm package . \
+            --version "${{ needs.image.outputs.version }}" \
+            --app-version "${{ needs.image.outputs.version }}" \
+            --destination ../../dist
+
+      - name: Attach chart to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tgz
+          generate_release_notes: true
+
+      - name: helm registry login (ghcr.io)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
+
+      - name: Push chart as an OCI artifact (ADR 0111)
+        run: helm push dist/booth-database-${{ needs.image.outputs.version }}.tgz oci://ghcr.io/projectbooth/charts

@@ -109,6 +109,15 @@ jobs:
       - run: |
           helm lint charts/booth-database --set mode=external \
             --set external.host=pg.example --set external.username=admin --set external.passwordSecret.name=pg-admin
+      # Keeps release.yml's chart step from rotting unnoticed (ADR 0111): package exactly as the
+      # release does, at a throwaway version, then render the packaged .tgz with default values and
+      # check the image is pinned to that version.
+      - name: Release chart packaging (as release.yml does it)
+        run: |
+          helm package charts/booth-database --version 0.0.0-ci --app-version 0.0.0-ci --destination dist
+          helm template booth-database dist/booth-database-0.0.0-ci.tgz > dist/rendered.yaml
+          grep -q 'image: "ghcr.io/projectbooth/booth-database:0.0.0-ci"' dist/rendered.yaml \
+            || { echo "packaged chart doesn't pin the image to its appVersion"; exit 1; }
 
   image:
     # Catches a broken Dockerfile on the PR that breaks it. Not pushed.
