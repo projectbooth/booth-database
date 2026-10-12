@@ -139,6 +139,12 @@ Its API verifies the caller's token itself (ADR 0041), so set `oidc.issuerUrl`/`
 the same provider and client booth-core uses. Unset, the view's API answers 503 and credential
 issuance is unaffected. Design and judgment calls: docs/decisions/0004 and 0005.
 
+Installed through booth-core's install API (the Module Store's Install button included), these are
+filled in for you (ADR 0113). The chart's `booth.projectbooth.io/identity-keys` annotation maps the
+platform's `issuerUrl`, `clientId`, `jwksUrl` and `groupsClaim` to `oidc.issuerUrl`,
+`oidc.clientId`, `oidc.jwksUrl` and `oidc.groupsClaim`, and any value you set yourself wins. A Helm
+CLI install doesn't use the annotation, so set them by hand there.
+
 **Key-fetch override (`oidc.jwksUrl`, env `BOOTH_OIDC_JWKS_URL`, ADR 0108).** Optional, default
 empty, which means signing keys come from `oidc.issuerUrl`'s discovery document as before. When
 set, typically to Keycloak's in-cluster Service over plain http on a bundled install, keys are

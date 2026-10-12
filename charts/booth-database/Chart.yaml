@@ -8,3 +8,10 @@ type: application
 version: 0.1.0
 appVersion: "0.1.0"
 home: https://github.com/projectbooth/booth-database
+# ADR 0113: where this chart keeps the platform's shared identity settings, so booth-core's install
+# API (the Module Store's Install button included) can fill them in. Only the four this chart uses:
+# its admin API trusts the OIDC issuer alone (no workload issuer) and it has no iframe-assertion
+# issuer setting. Every mapped path has a default in values.yaml (contracts/module-manifest.md).
+annotations:
+  booth.projectbooth.io/identity-keys: |
+    {"issuerUrl":"oidc.issuerUrl","clientId":"oidc.clientId","jwksUrl":"oidc.jwksUrl","groupsClaim":"oidc.groupsClaim"}

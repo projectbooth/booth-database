@@ -7,6 +7,7 @@ package contract
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -400,4 +401,89 @@ func TestChart_JWKSURLPassthrough(t *testing.T) {
 	if !strings.Contains(string(helmTemplate(t, "--set", "oidc.jwksUrl="+jwks)), "BOOTH_OIDC_JWKS_URL") {
 		t.Error("oidc.jwksUrl without an issuer was silently dropped")
 	}
+}
+
+// ADR 0113 / contracts/module-manifest.md "Chart annotation: identity keys": the annotation is
+// valid JSON, names only shared settings, and every mapped path has a default in values.yaml (so
+// helm template and CLI installs are unchanged). Same check as booth-storage's.
+func TestChart_IdentityKeysAnnotation(t *testing.T) {
+	chartBytes, err := os.ReadFile(filepath.Join("..", "..", "charts", "booth-database", "Chart.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chart struct {
+		Annotations map[string]string `yaml:"annotations"`
+	}
+	if err := yaml.Unmarshal(chartBytes, &chart); err != nil {
+		t.Fatalf("parsing Chart.yaml: %v", err)
+	}
+	raw, ok := chart.Annotations["booth.projectbooth.io/identity-keys"]
+	if !ok {
+		t.Fatal("Chart.yaml is missing the booth.projectbooth.io/identity-keys annotation (ADR 0113)")
+	}
+
+	var mapping map[string]string
+	if err := json.Unmarshal([]byte(raw), &mapping); err != nil {
+		t.Fatalf("booth.projectbooth.io/identity-keys is not valid JSON: %v\nvalue: %s", err, raw)
+	}
+	if len(mapping) == 0 {
+		t.Fatal("booth.projectbooth.io/identity-keys decoded to an empty object")
+	}
+
+	knownKeys := map[string]bool{
+		"issuerUrl": true, "clientId": true, "jwksUrl": true,
+		"workloadIssuerUrl": true, "groupsClaim": true, "iframeIssuerUrl": true,
+	}
+
+	valuesBytes, err := os.ReadFile(filepath.Join("..", "..", "charts", "booth-database", "values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := yaml.Unmarshal(valuesBytes, &values); err != nil {
+		t.Fatalf("parsing values.yaml: %v", err)
+	}
+
+	for key, path := range mapping {
+		if !knownKeys[key] {
+			t.Errorf("identity-keys annotation names unknown shared setting %q (want one of issuerUrl, clientId, jwksUrl, workloadIssuerUrl, groupsClaim, iframeIssuerUrl)", key)
+		}
+		if _, ok := valueAtPath(values, path); !ok {
+			t.Errorf("identity-keys annotation maps %q to values.yaml path %q, which has no default in values.yaml", key, path)
+		}
+	}
+
+	want := map[string]string{
+		"issuerUrl":   "oidc.issuerUrl",
+		"clientId":    "oidc.clientId",
+		"jwksUrl":     "oidc.jwksUrl",
+		"groupsClaim": "oidc.groupsClaim",
+	}
+	for k, p := range want {
+		if got := mapping[k]; got != p {
+			t.Errorf("identity-keys[%q] = %q, want %q", k, got, p)
+		}
+	}
+	// This chart trusts the OIDC issuer only and has no iframe-assertion issuer: mapping either
+	// would point core at a path that isn't wired to anything.
+	for _, k := range []string{"workloadIssuerUrl", "iframeIssuerUrl"} {
+		if p, ok := mapping[k]; ok {
+			t.Errorf("identity-keys maps %q to %q, but this chart has no such setting", k, p)
+		}
+	}
+}
+
+func valueAtPath(root map[string]any, dotted string) (any, bool) {
+	cur := any(root)
+	for _, part := range strings.Split(dotted, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = m[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
 }
