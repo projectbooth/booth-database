@@ -2,10 +2,10 @@
 # Registers booth-database with booth-core's module registry (ADR 0019, contracts/module-manifest.md).
 #
 # One native view (ADR 0093): a read-only status page under Manage — the active workspace's own
-# database (owners only), plus a cross-workspace listing for owners of an operator workspace
-# (docs/decisions/0004). A single view, deliberately no adminNavPath: there is no separate
-# non-admin browsing experience. UI package: @projectbooth/database-ui (web/). Workspace data
-# itself is still used through the client library, never through this view.
+# database (owners only), plus a cross-workspace listing for platform operators (ADR 0094) — and,
+# since ADR 0116, the workspace's tables, a row preview and a read-only SQL console for any member
+# (deep-linked from booth-catalog). A single view, deliberately no adminNavPath. UI package:
+# @projectbooth/database-ui (web/). Workspace code still writes through the credential broker.
 #
 # Deliberately NO `database:` field: that asks booth-core to provision a module-internal database
 # on core's own Postgres (ADR 0053), which this module neither needs nor should use (ADR 0081).
@@ -33,6 +33,14 @@ spec:
   providesCredentials:
     kinds:
       - postgres
+  {{- end }}
+  {{- if .Values.eventBus.enabled }}
+  # Event-bus usage (ADR 0050): booth-core derives this module's NATS credential, and its
+  # per-subject permissions, from exactly this. Publish only (ADR 0116): booth-catalog indexes a
+  # workspace database's tables from database.table.created/updated/deleted.
+  events:
+    publish:
+      - database.table.*
   {{- end }}
   serviceRef:
     name: {{ include "booth-database.fullname" . }}

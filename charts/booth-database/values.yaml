@@ -124,6 +124,35 @@ leases:
 credentialBroker:
   enabled: true
 
+# ADR 0116: booth-catalog lists each workspace database's tables from events this module
+# publishes on the event bus (NATS, ADR 0021): database.table.created / updated / deleted. The
+# BoothModule declares `events: {publish: [database.table.*]}`, and booth-core answers by writing
+# the booth-event-bus-credentials Secret (a credential scoped to exactly that, plus the bus's
+# in-cluster URL) into this namespace. The pod mounts it and waits until it exists, on purpose:
+# a module that came up without it would look healthy while the Catalog never heard of a table.
+eventBus:
+  # false leaves the bus out entirely: no `events` on the manifest, no credential, no connection.
+  # The Tables view, preview and SQL console still work; the Catalog just never lists the tables.
+  enabled: true
+  credentialsSecret:
+    # Read the credential from booth-core's Secret (the normal case). Set false only against a bus
+    # with authentication off (a test stand-in), and then nats.url is required.
+    enabled: true
+    # The name booth-core gives it (ADR 0050).
+    name: booth-event-bus-credentials
+
+nats:
+  # Overrides the bus URL from the credentials Secret. Required only when
+  # eventBus.credentialsSecret.enabled is false.
+  url: ""
+
+tableEvents:
+  # How often every known workspace database is compared with what was last published, and the
+  # changes published (ADR 0116 §2). Opening the Tables view also triggers a pass for that
+  # workspace (at most every 30s). A change in the approximate row count alone republishes a
+  # table at most once an hour, whatever this is. At least 10s. docs/decisions/0006.
+  interval: 5m
+
 # Defense in depth beneath credential auth: a NetworkPolicy on the bundled server admitting only
 # this module's own pod, its backup Job, and namespaces labelled with clientNamespaceLabel — the
 # same label booth-core's bundled Postgres admits and that core already applies to the namespace of

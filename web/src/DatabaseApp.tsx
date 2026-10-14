@@ -1,7 +1,11 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo } from "react";
 import { getStatus, listDatabases, type ApiContext, type GetAccessToken } from "./api/client";
+import { Link, Muted, Panel } from "./components";
+import { ConsoleView } from "./ConsoleView";
 import { formatBytes, formatCreated } from "./format";
 import { useLoad, type LoadState } from "./hooks";
+import { tabOf, useRoute } from "./navigation";
+import { TablePage, TablesView } from "./TablesView";
 import type { DatabaseStatus, ListedDatabase, WorkspaceRole } from "./types";
 
 /**
@@ -20,26 +24,67 @@ export interface DatabaseAppProps {
 }
 
 /**
- * The native view booth-design mounts for booth-database (ADR 0030, ADR 0093): a read-only status
- * page. Owners see their workspace's database; platform operators (/platform/operator, ADR 0094)
- * see every workspace's database, whatever their role in the workspace they're acting in. Nothing here can create, change or drop a database — deliberately
- * (ADR 0093, ADR 0089). No outer padding: the shell owns it (ADR 0072).
+ * The native view booth-design mounts for booth-database (ADR 0030, ADR 0093, ADR 0116), with
+ * three tabs, each at a stable path (navigation.ts):
+ *
+ *   - Overview: a read-only status page. Owners see their workspace's database; platform operators
+ *     (/platform/operator, ADR 0094) see every workspace's database, whatever their role in the
+ *     workspace they're acting in.
+ *   - Tables: every table and view in the workspace database, a page per table with its columns
+ *     and a 100-row preview. Any member.
+ *   - SQL console: one read-only statement at a time. Any member.
+ *
+ * Nothing here can create, change or drop anything — deliberately (ADR 0093, ADR 0089, ADR 0116:
+ * the preview and console run read-only, as a viewer, whatever the caller's role). No outer
+ * padding: the shell owns it (ADR 0072).
  */
 export function DatabaseApp({ workspace, role, theme, getAccessToken }: DatabaseAppProps) {
   const api = useMemo<ApiContext>(() => ({ workspace, getAccessToken }), [workspace, getAccessToken]);
-  const isOwner = role === "owner";
-  const { state, reload } = useLoad(() => getStatus(api), [api], isOwner);
+  const route = useRoute();
+  const tab = tabOf(route);
 
   return (
     <div data-theme={theme} className="flex flex-col gap-6 text-slate-900 dark:text-slate-100">
-      <header className="flex items-start justify-between gap-4">
+      <header className="flex flex-col gap-4">
         <div>
           <h1 className="text-xl font-semibold">Database</h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            This workspace&apos;s own PostgreSQL database, used from code with short-lived credentials. Read-only status.
+            This workspace&apos;s own PostgreSQL database, used from code with short-lived credentials. Browsing here is read-only.
           </p>
         </div>
-        {isOwner && (
+        <nav aria-label="Database sections" className="flex gap-1 border-b border-slate-200 dark:border-slate-700">
+          {TABS.map((t) => (
+            <Link key={t.tab} to={{ name: t.tab }} current={t.tab === tab} className={t.tab === tab ? TAB_ACTIVE : TAB_IDLE}>
+              {t.label}
+            </Link>
+          ))}
+        </nav>
+      </header>
+
+      {route.name === "overview" && <Overview api={api} isOwner={role === "owner"} />}
+      {route.name === "tables" && <TablesView api={api} />}
+      {route.name === "table" && <TablePage api={api} schema={route.schema} table={route.table} />}
+      {route.name === "sql" && <ConsoleView api={api} schema={route.schema} table={route.table} />}
+    </div>
+  );
+}
+
+const TABS = [
+  { tab: "overview", label: "Overview" },
+  { tab: "tables", label: "Tables" },
+  { tab: "sql", label: "SQL console" },
+] as const;
+
+const TAB_ACTIVE = "-mb-px border-b-2 border-indigo-600 px-3 py-2 text-sm font-medium text-indigo-700 dark:border-indigo-400 dark:text-indigo-300";
+const TAB_IDLE =
+  "-mb-px border-b-2 border-transparent px-3 py-2 text-sm font-medium text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:text-slate-400 dark:hover:border-slate-600 dark:hover:text-slate-100";
+
+function Overview({ api, isOwner }: { api: ApiContext; isOwner: boolean }) {
+  const { state, reload } = useLoad(() => getStatus(api), [api], isOwner);
+  return (
+    <>
+      {isOwner && (
+        <div className="flex justify-end">
           <button
             type="button"
             onClick={reload}
@@ -47,13 +92,11 @@ export function DatabaseApp({ workspace, role, theme, getAccessToken }: Database
           >
             Refresh
           </button>
-        )}
-      </header>
-
+        </div>
+      )}
       {isOwner ? <OwnerView state={state} api={api} /> : <NonOwnerView api={api} />}
-
       <ConnectSnippet />
-    </div>
+    </>
   );
 }
 
@@ -238,10 +281,6 @@ function ErrorBanner({ state }: { state: { error: string; httpStatus?: number } 
   );
 }
 
-function Panel({ children }: { children: ReactNode }) {
-  return <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">{children}</div>;
-}
-
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -249,8 +288,4 @@ function Stat({ label, value }: { label: string; value: string }) {
       <dd className="mt-0.5 text-lg font-semibold tabular-nums">{value}</dd>
     </div>
   );
-}
-
-function Muted({ children }: { children: ReactNode }) {
-  return <p className="text-sm text-slate-500 dark:text-slate-400">{children}</p>;
 }

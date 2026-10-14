@@ -33,3 +33,48 @@ export interface ListedDatabase extends DatabaseStatus {
   /** Set only for a workspace the caller belongs to. */
   workspace?: string;
 }
+
+// ADR 0116: the workspace database's contents. Mirrors internal/tables and internal/query.
+
+export type RelationKind = "table" | "view" | "materialized_view";
+
+export interface TableColumn {
+  name: string;
+  /** PostgreSQL's format_type() rendering, e.g. "character varying(20)". */
+  type: string;
+  nullable: boolean;
+  comment: string | null;
+}
+
+/** One table, view or materialized view (also the database.table.* event payload). */
+export interface Relation {
+  schema: string;
+  name: string;
+  kind: RelationKind;
+  comment: string | null;
+  columns: TableColumn[];
+  /** The planner's estimate, null when there is none (never analyzed) or for a view. Show as "about N". */
+  approxRows: number | null;
+  schemaHash: string;
+}
+
+/** GET /api/tables */
+export interface TablesResponse {
+  workspace: string;
+  provisioned: boolean;
+  tables: Relation[];
+}
+
+/** A rendered value: null, a boolean, a number (int2/int4/float), or PostgreSQL's own text. */
+export type CellValue = string | number | boolean | null;
+
+/** A preview's or console query's result. */
+export interface QueryResult {
+  columns: { name: string; type: string }[];
+  rows: CellValue[][];
+  rowCount: number;
+  truncated: boolean;
+  truncatedReason?: "rows" | "bytes" | "value";
+  commandTag: string;
+  durationMs: number;
+}

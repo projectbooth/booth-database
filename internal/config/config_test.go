@@ -157,3 +157,25 @@ func TestLoad_JWKSURL(t *testing.T) {
 		t.Fatalf("cfg=%+v err=%v", cfg.OIDC, err)
 	}
 }
+
+// ADR 0116's event bus and reconcile interval.
+func TestLoad_TableEvents(t *testing.T) {
+	setBase(t)
+	cfg, err := Load()
+	if err != nil || cfg.NATSURL != "" || cfg.TableEventsInterval != 5*time.Minute {
+		t.Fatalf("defaults: events off, 5m interval: %+v %v", cfg, err)
+	}
+	t.Setenv("BOOTH_NATS_CREDS_FILE", "/etc/booth/event-bus/nats.creds")
+	if _, err := Load(); err == nil {
+		t.Error("a creds file without a bus URL was accepted")
+	}
+	t.Setenv("BOOTH_NATS_URL", "nats://nats.booth-system.svc:4222")
+	t.Setenv("BOOTH_DATABASE_TABLE_EVENTS_INTERVAL", "1m")
+	if cfg, err = Load(); err != nil || cfg.TableEventsInterval != time.Minute {
+		t.Fatalf("cfg=%+v err=%v", cfg, err)
+	}
+	t.Setenv("BOOTH_DATABASE_TABLE_EVENTS_INTERVAL", "1s")
+	if _, err := Load(); err == nil {
+		t.Error("an interval under 10s was accepted")
+	}
+}
