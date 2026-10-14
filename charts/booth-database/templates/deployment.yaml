@@ -145,6 +145,9 @@ spec:
             # ADR 0116: how often every known workspace database is checked for table changes.
             - name: BOOTH_DATABASE_TABLE_EVENTS_INTERVAL
               value: {{ .Values.tableEvents.interval | quote }}
+            # Relations never published as table events, as a JSON array (names may hold commas).
+            - name: BOOTH_DATABASE_TABLE_EVENTS_IGNORE
+              value: {{ .Values.tableEvents.ignore | default list | toJson | quote }}
             {{- if .Values.eventBus.enabled }}
             {{- if .Values.eventBus.credentialsSecret.enabled }}
             # The credential booth-core minted for this module's declared `events` (ADR 0050). The

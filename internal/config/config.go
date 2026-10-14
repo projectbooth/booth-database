@@ -4,6 +4,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/projectbooth/booth-database/internal/auth"
+	"github.com/projectbooth/booth-database/internal/tables"
 )
 
 const (
@@ -81,6 +83,9 @@ type Config struct {
 	// TableEventsInterval is how often every known workspace database is reconciled against what
 	// was last published (ADR 0116 §2). Default 5 minutes.
 	TableEventsInterval time.Duration
+	// TableEventsIgnore is the compiled tableEvents.ignore: schema.table globs never published as
+	// created or updated. Unset means tables.DefaultIgnore; "[]" ignores nothing.
+	TableEventsIgnore *tables.IgnoreList
 }
 
 // Load reads configuration from the environment.
@@ -186,6 +191,17 @@ func Load() (Config, error) {
 	}
 	if cfg.TableEventsInterval < 10*time.Second {
 		return Config{}, fmt.Errorf("BOOTH_DATABASE_TABLE_EVENTS_INTERVAL must be at least 10s, got %s", cfg.TableEventsInterval)
+	}
+	// A JSON array, since a PostgreSQL name may contain a comma or a space.
+	ignore := tables.DefaultIgnore
+	if v, ok := os.LookupEnv("BOOTH_DATABASE_TABLE_EVENTS_IGNORE"); ok && v != "" {
+		ignore = nil
+		if err := json.Unmarshal([]byte(v), &ignore); err != nil {
+			return Config{}, fmt.Errorf("BOOTH_DATABASE_TABLE_EVENTS_IGNORE must be a JSON array of strings: %v", err)
+		}
+	}
+	if cfg.TableEventsIgnore, err = tables.CompileIgnore(ignore); err != nil {
+		return Config{}, fmt.Errorf("BOOTH_DATABASE_TABLE_EVENTS_IGNORE: %w", err)
 	}
 
 	cfg.PinStatefulSet = os.Getenv("BOOTH_DATABASE_PIN_STATEFULSET")

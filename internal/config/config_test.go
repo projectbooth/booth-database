@@ -2,8 +2,11 @@ package config
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/projectbooth/booth-database/internal/tables"
 )
 
 func setBase(t *testing.T) {
@@ -177,5 +180,31 @@ func TestLoad_TableEvents(t *testing.T) {
 	t.Setenv("BOOTH_DATABASE_TABLE_EVENTS_INTERVAL", "1s")
 	if _, err := Load(); err == nil {
 		t.Error("an interval under 10s was accepted")
+	}
+}
+
+// tableEvents.ignore: the default list when unset, a JSON array when set, and a bad pattern is a
+// startup error that names it.
+func TestLoad_TableEventsIgnore(t *testing.T) {
+	setBase(t)
+	cfg, err := Load()
+	if err != nil || strings.Join(cfg.TableEventsIgnore.Patterns(), ",") != strings.Join(tables.DefaultIgnore, ",") {
+		t.Fatalf("default: %v %v", cfg.TableEventsIgnore.Patterns(), err)
+	}
+	t.Setenv("BOOTH_DATABASE_TABLE_EVENTS_IGNORE", `["staging.*", "*.tmp, old"]`)
+	if cfg, err = Load(); err != nil || !cfg.TableEventsIgnore.Ignored("public", "tmp, old") || cfg.TableEventsIgnore.Ignored("public", "schema_migrations") {
+		t.Fatalf("set: %v %v", cfg.TableEventsIgnore.Patterns(), err)
+	}
+	t.Setenv("BOOTH_DATABASE_TABLE_EVENTS_IGNORE", `[]`)
+	if cfg, err = Load(); err != nil || len(cfg.TableEventsIgnore.Patterns()) != 0 {
+		t.Fatalf("empty list: %v %v", cfg.TableEventsIgnore.Patterns(), err)
+	}
+	t.Setenv("BOOTH_DATABASE_TABLE_EVENTS_IGNORE", `["*.ok", "no_dot_here"]`)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), `"no_dot_here"`) {
+		t.Errorf("bad pattern: err = %v, want it named", err)
+	}
+	t.Setenv("BOOTH_DATABASE_TABLE_EVENTS_IGNORE", `*.schema_migrations`)
+	if _, err := Load(); err == nil {
+		t.Error("a non-JSON value was accepted")
 	}
 }

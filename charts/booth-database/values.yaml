@@ -152,6 +152,21 @@ tableEvents:
   # workspace (at most every 30s). A change in the approximate row count alone republishes a
   # table at most once an hour, whatever this is. At least 10s. docs/decisions/0006.
   interval: 5m
+  # Relations never published to the Catalog: `schema.table` glob patterns, where `*` matches any
+  # run of characters (including "."), everything else matches itself case-sensitively, and the
+  # pattern must match the whole `schema.name`. A bad pattern (empty, surrounding whitespace, or
+  # no ".") stops the module at startup with an error naming it. `[]` ignores nothing.
+  # This filters events only: the Database page's Tables tab, preview and SQL console still show
+  # every table.
+  # Adding a pattern that matches a table already in the Catalog publishes
+  # database.table.deleted for it once, exactly like a drop: the Catalog marks its row missing
+  # (ADR 0116 fork C) and an owner removes that row by hand. docs/decisions/0007.
+  ignore:
+    - "*.schema_migrations"
+    - "*.alembic_version"
+    - "*.flyway_schema_history"
+    - "*.django_migrations"
+    - "*.__diesel_schema_migrations"
 
 # Defense in depth beneath credential auth: a NetworkPolicy on the bundled server admitting only
 # this module's own pod, its backup Job, and namespaces labelled with clientNamespaceLabel — the

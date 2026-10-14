@@ -239,6 +239,99 @@ func TestReconcile_CreateAlterDrop(t *testing.T) {
 	}
 }
 
+// tableEvents.ignore: an ignored relation is never published, and one already published that
+// becomes ignored (a config change) is published as deleted exactly once and forgotten.
+func TestReconcile_Ignore(t *testing.T) {
+	dsn := adminDSN(t)
+	ctx := context.Background()
+	prov, err := provision.New(ctx, dsn, provision.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prov.Close()
+	bus, cons := startBus(t)
+
+	ws := fmt.Sprintf("ignore-%s", strings.ReplaceAll(uuid.NewString(), "-", "")[:12])
+	lease, err := prov.Issue(ctx, ws, uuid.NewString(), true, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := pgx.ParseConfig(dsn)
+	cfg.User, cfg.Password, cfg.Database = lease.Username, lease.Password, lease.Database
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	exec := func(sql string) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	defaults, err := tables.CompileIgnore(tables.DefaultIgnore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	r := &tables.Reconciler{Store: prov, Bus: bus, Ignore: defaults, Now: func() time.Time { return now }}
+	pass := func() []received {
+		t.Helper()
+		if _, err := r.ReconcileWorkspace(ctx, ws); err != nil {
+			t.Fatal(err)
+		}
+		return drain(t, cons)
+	}
+	names := func(rs []received) []string {
+		out := []string{}
+		for _, m := range rs {
+			d := m.Env["data"].(map[string]any)
+			out = append(out, m.Env["eventType"].(string)+" "+d["schema"].(string)+"."+d["name"].(string))
+		}
+		return out
+	}
+
+	// Ignored by default: never created, nor updated when it changes shape or rows.
+	exec(`CREATE TABLE public.schema_migrations (version bigint PRIMARY KEY);
+		CREATE SCHEMA app; CREATE TABLE app.alembic_version (version_num text);
+		CREATE TABLE public.players (id int)`)
+	if got := names(pass()); strings.Join(got, ",") != tables.EventCreated+" public.players" {
+		t.Fatalf("first pass: %v", got)
+	}
+	exec(`ALTER TABLE public.schema_migrations ADD COLUMN applied_at timestamptz;
+		INSERT INTO public.schema_migrations SELECT g FROM generate_series(1, 50) g; ANALYZE public.schema_migrations`)
+	now = now.Add(2 * time.Hour)
+	if got := pass(); len(got) != 0 {
+		t.Fatalf("an ignored table was published: %v", names(got))
+	}
+
+	// players becomes ignored (a config change): exactly one deleted, then nothing, and the
+	// recorded state no longer has it.
+	r.Ignore, err = tables.CompileIgnore(append(append([]string{}, tables.DefaultIgnore...), "public.play*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := pass()
+	if strings.Join(names(got), ",") != tables.EventDeleted+" public.players" || len(got[0].Env["data"].(map[string]any)) != 2 {
+		t.Fatalf("newly ignored: %v", names(got))
+	}
+	for i := 0; i < 2; i++ {
+		exec("ALTER TABLE public.players ADD COLUMN c" + fmt.Sprint(i) + " int")
+		if got := pass(); len(got) != 0 {
+			t.Fatalf("pass %d after the delete published %v", i, names(got))
+		}
+	}
+	if st, err := prov.PublishedTables(ctx, ws); err != nil || len(st) != 0 {
+		t.Fatalf("state after the ignore: %v %v", st, err)
+	}
+
+	// Un-ignoring it again is an ordinary create.
+	r.Ignore = defaults
+	if got := names(pass()); strings.Join(got, ",") != tables.EventCreated+" public.players" {
+		t.Fatalf("un-ignored: %v", got)
+	}
+}
+
 // Without a live bus nothing is published and nothing recorded, so the next pass with one still
 // publishes everything.
 func TestReconcile_NoBusRecordsNothing(t *testing.T) {

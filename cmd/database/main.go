@@ -124,7 +124,7 @@ func run() error {
 	// the background; until it does, the loop publishes and records nothing.
 	bus := events.New(events.Config{URL: cfg.NATSURL, CredentialsFile: cfg.NATSCredsFile})
 	go bus.Run(ctx)
-	reconciler := &tables.Reconciler{Store: prov, Bus: bus}
+	reconciler := &tables.Reconciler{Store: prov, Bus: bus, Ignore: cfg.TableEventsIgnore}
 	if cfg.NATSURL != "" {
 		go reconciler.Run(ctx, cfg.TableEventsInterval)
 	}

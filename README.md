@@ -193,6 +193,15 @@ alone republishes at most once an hour. The manifest declares `events: {publish:
 [database.table.*]}`, so booth-core delivers the `booth-event-bus-credentials` Secret, and the pod
 waits for it. `eventBus.enabled=false` turns the events off and leaves the tabs working.
 
+`tableEvents.ignore` keeps relations out of the Catalog: `schema.table` globs (`*` matches any
+run of characters, case-sensitive, whole name). The default ignores common migration tools'
+bookkeeping tables (`*.schema_migrations`, `*.alembic_version`, `*.flyway_schema_history`,
+`*.django_migrations`, `*.__diesel_schema_migrations`); `[]` ignores nothing, and a bad pattern
+stops the module at startup. It filters events only: the Tables tab, preview and console still
+show everything. Ignoring a table already in the Catalog publishes one `deleted` for it, so the
+Catalog marks the row missing and an owner removes it by hand.
+[`docs/decisions/0007-table-events-ignore.md`](docs/decisions/0007-table-events-ignore.md).
+
 The module keeps the last-published state, which includes workspace slugs, in a private
 `booth_database` schema of its admin maintenance database. Design, payload fields and judgment
 calls: [`docs/decisions/0006-tables-preview-sql.md`](docs/decisions/0006-tables-preview-sql.md).
