@@ -222,6 +222,17 @@ func TestManifest_TableEvents(t *testing.T) {
 	if strings.Contains(s, "subPath") {
 		t.Error("the credential must not be a sub-path mount: the kubelet never updates those")
 	}
+	// tableEvents.ignore reaches the process as a JSON array, the default list by default.
+	if want := `value: "[\"*.schema_migrations\",\"*.alembic_version\",\"*.flyway_schema_history\",\"*.django_migrations\",\"*.__diesel_schema_migrations\"]"`; !strings.Contains(s, "BOOTH_DATABASE_TABLE_EVENTS_IGNORE") || !strings.Contains(s, want) {
+		t.Errorf("render lacks the default ignore list %s", want)
+	}
+	if none := string(helmTemplate(t, "--set", "tableEvents.ignore=null")); !strings.Contains(none, `value: "[]"`) {
+		t.Error("an unset ignore list must render as [] (ignore nothing)")
+	}
+	custom := string(helmTemplate(t, "--set-json", `tableEvents.ignore=["staging.*","raw.tmp, old"]`))
+	if !strings.Contains(custom, `value: "[\"staging.*\",\"raw.tmp, old\"]"`) {
+		t.Error("a custom ignore list isn't passed through as given")
+	}
 	off := string(helmTemplate(t, "--set", "eventBus.enabled=false"))
 	if strings.Contains(off, "BOOTH_NATS") || strings.Contains(off, "event-bus") {
 		t.Error("eventBus.enabled=false still wires the bus")

@@ -59,7 +59,11 @@ type Reconciler struct {
 	RowGap time.Duration
 	// NudgeGap rate-limits Nudge per workspace; 30s unless set.
 	NudgeGap time.Duration
-	Now      func() time.Time
+	// Ignore lists relations never published as created or updated (tableEvents.ignore). One
+	// already published that becomes ignored is published as deleted once, like a drop. Nil
+	// ignores nothing.
+	Ignore *IgnoreList
+	Now    func() time.Time
 
 	mu        sync.Mutex
 	lastNudge map[string]time.Time
@@ -131,6 +135,9 @@ func (r *Reconciler) ReconcileWorkspace(ctx context.Context, ws string) ([]Chang
 		if !provisioned {
 			return nil // no database (yet, or any more): never publish deletes on doubt
 		}
+		// An ignored relation is left out before the diff, so it is never created or updated, and
+		// one published before it became ignored diffs as deleted (once: it is then forgotten).
+		current = r.Ignore.filter(current)
 		published, err := r.Store.PublishedTables(ctx, ws)
 		if err != nil {
 			return fmt.Errorf("reading published state: %w", err)

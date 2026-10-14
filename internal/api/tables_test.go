@@ -537,6 +537,31 @@ func TestTables_Listing(t *testing.T) {
 	}
 }
 
+// tableEvents.ignore filters events only: the Tables API lists a migration table the default
+// ignore list keeps out of the Catalog, and it can be previewed.
+func TestTables_ListsIgnoredTables(t *testing.T) {
+	hs := newPGHarness(t, 0)
+	ws := hs.workspace("ign", `
+		CREATE TABLE public.schema_migrations (version bigint PRIMARY KEY);
+		INSERT INTO public.schema_migrations VALUES (20261014);
+		CREATE TABLE public.players (id int)`)
+	r := hs.do(http.MethodGet, "/api/tables", ws, "viewer", "v", nil)
+	wantCode(t, r, 200, "")
+	got := map[string]bool{}
+	for _, it := range r.Body["tables"].([]any) {
+		m := it.(map[string]any)
+		got[m["schema"].(string)+"."+m["name"].(string)] = true
+	}
+	if !got["public.schema_migrations"] || !got["public.players"] {
+		t.Fatalf("listing: %v", got)
+	}
+	r = hs.do(http.MethodGet, "/api/tables/preview?schema=public&name=schema_migrations", ws, "viewer", "v", nil)
+	wantCode(t, r, 200, "")
+	if rows := r.Body["rows"].([]any); len(rows) != 1 {
+		t.Fatalf("preview: %v", r.Body)
+	}
+}
+
 func keys(m map[string]map[string]any) []string {
 	out := []string{}
 	for k := range m {

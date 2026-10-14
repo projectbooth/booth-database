@@ -66,6 +66,8 @@ missing is never announced as deleted.
   on-demand pass, from publishing the same change twice.
 - **Without a live bus (or with `eventBus.enabled=false`) nothing is published or recorded.** The
   Tables view, preview and console are unaffected.
+- **Relations matching `tableEvents.ignore` are never published** (added later; see
+  [0007](0007-table-events-ignore.md)). They still appear in the Tables view.
 
 ## §3 Event shape (for `contracts/`)
 
