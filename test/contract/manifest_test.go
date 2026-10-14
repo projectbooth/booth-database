@@ -183,7 +183,7 @@ func TestManifest_CredentialProvider(t *testing.T) {
 }
 
 // ADR 0081 / the brief: this is not an ADR 0053 module-internal database, and must never ask
-// core to provision one on core's own Postgres. It also needs no event bus or workload minting.
+// core to provision one on core's own Postgres. It also needs no workload minting.
 func TestManifest_DoesNotAskCoreForAModuleDatabase(t *testing.T) {
 	requireHelm(t)
 	for _, extra := range [][]string{nil, externalValues} {
@@ -191,9 +191,47 @@ func TestManifest_DoesNotAskCoreForAModuleDatabase(t *testing.T) {
 		if m.Spec.Database != nil {
 			t.Error("manifest declares `database` — that's booth-core's module-internal Postgres (ADR 0053), not this module's")
 		}
-		if m.Spec.WorkloadIdentity != nil || m.Spec.Events != nil {
+		if m.Spec.WorkloadIdentity != nil {
 			t.Error("manifest declares capabilities this module doesn't use")
 		}
+	}
+}
+
+// ADR 0116 / ADR 0050: publish database.table.* and nothing else; subscribe to nothing. The pod
+// mounts core's credential as a directory (so renewal reaches it) and reads the URL from it.
+func TestManifest_TableEvents(t *testing.T) {
+	requireHelm(t)
+	m := renderBoothModule(t)
+	pub, _ := m.Spec.Events["publish"].([]any)
+	if len(pub) != 1 || pub[0] != "database.table.*" || m.Spec.Events["subscribe"] != nil {
+		t.Fatalf("events = %v, want {publish: [database.table.*]}", m.Spec.Events)
+	}
+	if off := renderBoothModule(t, "--set", "eventBus.enabled=false"); off.Spec.Events != nil {
+		t.Error("eventBus.enabled=false must drop `events`")
+	}
+
+	s := string(helmTemplate(t))
+	for _, want := range []string{
+		"BOOTH_NATS_CREDS_FILE", "/etc/booth/event-bus/nats.creds", "name: booth-event-bus-credentials",
+		"key: url", "mountPath: /etc/booth/event-bus", "BOOTH_DATABASE_TABLE_EVENTS_INTERVAL", `value: "5m"`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("render lacks %q", want)
+		}
+	}
+	if strings.Contains(s, "subPath") {
+		t.Error("the credential must not be a sub-path mount: the kubelet never updates those")
+	}
+	off := string(helmTemplate(t, "--set", "eventBus.enabled=false"))
+	if strings.Contains(off, "BOOTH_NATS") || strings.Contains(off, "event-bus") {
+		t.Error("eventBus.enabled=false still wires the bus")
+	}
+	if out, err := runHelm("--set", "eventBus.credentialsSecret.enabled=false"); err == nil {
+		t.Errorf("rendered with no credential and no nats.url:\n%.200s", out)
+	}
+	stand := string(helmTemplate(t, "--set", "eventBus.credentialsSecret.enabled=false", "--set", "nats.url=nats://stand-in:4222"))
+	if !strings.Contains(stand, `value: "nats://stand-in:4222"`) || strings.Contains(stand, "nats.creds") {
+		t.Error("a test stand-in bus isn't wired as given")
 	}
 }
 

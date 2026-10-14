@@ -22,9 +22,12 @@ import (
 	"github.com/projectbooth/booth-database/internal/auth"
 	"github.com/projectbooth/booth-database/internal/config"
 	"github.com/projectbooth/booth-database/internal/credentialbroker"
+	"github.com/projectbooth/booth-database/internal/events"
 	"github.com/projectbooth/booth-database/internal/nodepin"
 	"github.com/projectbooth/booth-database/internal/provision"
+	"github.com/projectbooth/booth-database/internal/query"
 	"github.com/projectbooth/booth-database/internal/server"
+	"github.com/projectbooth/booth-database/internal/tables"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -117,6 +120,15 @@ func run() error {
 			}
 		}()
 	}
+	// ADR 0116: database.table.* events for booth-catalog. The bus connects (and reconnects) in
+	// the background; until it does, the loop publishes and records nothing.
+	bus := events.New(events.Config{URL: cfg.NATSURL, CredentialsFile: cfg.NATSCredsFile})
+	go bus.Run(ctx)
+	reconciler := &tables.Reconciler{Store: prov, Bus: bus}
+	if cfg.NATSURL != "" {
+		go reconciler.Run(ctx, cfg.TableEventsInterval)
+	}
+
 	adminAPI := api.NewHandler(api.Deps{
 		Verifier: func() auth.TokenVerifier {
 			if v := verifier.Load(); v != nil {
@@ -125,6 +137,9 @@ func run() error {
 			return nil
 		},
 		Source: prov,
+		Tables: prov,
+		Query:  &query.Executor{Sessions: prov},
+		Nudge:  reconciler.Nudge,
 	})
 
 	httpServer := &http.Server{

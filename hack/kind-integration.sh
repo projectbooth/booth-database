@@ -47,13 +47,19 @@ kubectl apply -f test/integration/fixtures/boothmodule-crd.yaml
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n "$NS" create secret generic booth-credential-broker-provider-credentials \
   --from-literal=credential="$CRED" --dry-run=client -o yaml | kubectl apply -f -
+# Stands in for the event-bus credential booth-core writes for a module declaring `events`
+# (ADR 0050), so the pod can start. There is no bus here: the module logs that it can't connect
+# and serves everything else (the table events themselves are tested against a real nats-server in
+# internal/tables).
+kubectl -n "$NS" create secret generic booth-event-bus-credentials \
+  --from-literal=url=nats://127.0.0.1:1 --from-literal=nats.creds=stand-in --dry-run=client -o yaml | kubectl apply -f -
 
 helm upgrade --install db charts/booth-database -n "$NS" \
   --set image.repository=booth-database --set image.tag=it --set image.pullPolicy=Never \
   --set leases.reapInterval=2s --set leases.minTTL=1s --set leases.maxTTL=1h --wait --timeout 5m
 
 echo "--- BoothModule accepted by booth-core's real CRD schema:"
-kubectl -n "$NS" get boothmodule database -o jsonpath='{.spec.id} providesCredentials={.spec.providesCredentials.kinds}{"\n"}'
+kubectl -n "$NS" get boothmodule database -o jsonpath='{.spec.id} providesCredentials={.spec.providesCredentials.kinds} events.publish={.spec.events.publish}{"\n"}'
 
 echo "--- ADR 0090: StatefulSet pinned to the node its pod landed on:"
 node=""

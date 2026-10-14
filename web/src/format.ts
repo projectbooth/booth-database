@@ -19,3 +19,17 @@ export function formatCreated(iso: string | null): string {
   if (Number.isNaN(d.getTime())) return "Unknown";
   return d.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+
+/** An approximate row count as the UI must show it (ADR 0116: planner statistics lag, so always
+ *  "about"). Null means PostgreSQL has no estimate yet (or it's a view). */
+export function formatApproxRows(n: number | null): string {
+  if (n === null) return "Unknown";
+  const rounded = n < 1000 ? n : Number(n.toPrecision(2));
+  return `about ${rounded.toLocaleString("en-US")} ${n === 1 ? "row" : "rows"}`;
+}
+
+const KIND_LABELS = { table: "Table", view: "View", materialized_view: "Materialized view" } as const;
+
+export function kindLabel(kind: keyof typeof KIND_LABELS): string {
+  return KIND_LABELS[kind] ?? kind;
+}

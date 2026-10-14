@@ -45,7 +45,9 @@ field.
 | `cmd/database`, `internal/` | The provider service (Go): `POST /internal/credentials`, `/healthz`, `/livez` |
 | `internal/provision` | Per-workspace databases, lease roles, the expiry reaper |
 | `internal/nodepin` | Pins the bundled StatefulSet to its node (ADR 0090) |
-| `internal/api`, `internal/auth` | Read-only admin API for the native view (ADR 0093), with OIDC and ADR 0041 role derivation |
+| `internal/api`, `internal/auth` | The native view's API (ADR 0093, ADR 0116), with OIDC and ADR 0041 role derivation |
+| `internal/tables`, `internal/events` | Table listing, and the `database.table.*` reconcile loop and its event-bus connection (ADR 0116) |
+| `internal/query` | Table preview and read-only SQL console: viewer-capped, read-only, time-, row- and byte-limited (ADR 0116) |
 | `web/` | `@projectbooth/database-ui`, the native admin view |
 | `charts/booth-database` | Helm chart: `mode: bundled` or `mode: external`, backup CronJob, `BoothModule` |
 | `client/` | `booth-database-client` (Python, `import booth_database`), which calls the broker directly. **For use outside the cluster only** (ADR 0098); in-cluster code uses the sidecar's `DATABASE_URL` (above). Not verified end to end from outside a cluster: see [`client/README.md`](client/README.md) |
@@ -134,6 +136,7 @@ It shows:
   workspace's database. Workspaces the viewer
   doesn't belong to appear by hashed name only; the module never stores slugs.
 - There is no create, drop or change action, by design.
+- Every member also gets the Tables and SQL console tabs (ADR 0116, below).
 
 Its API verifies the caller's token itself (ADR 0041), so set `oidc.issuerUrl`/`oidc.clientId` to
 the same provider and client booth-core uses. Unset, the view's API answers 503 and credential
@@ -153,6 +156,46 @@ fetched from that URL directly, discovery is skipped, and a token's `iss` must s
 effective issuer and key source are logged once at startup. Trust assumption: the key fetch is
 in-cluster, unauthenticated and unencrypted, so it relies on NetworkPolicy and cluster trust to stop
 anyone substituting keys on the way.
+
+## Tables, row preview and SQL console (ADR 0116)
+
+The same native view has three tabs, each at a stable path booth-catalog links to:
+
+| Path | Page |
+|---|---|
+| `/database` | Overview (the status page above) |
+| `/database/tables` | Every table, view and materialized view in the workspace database: schema, kind, "about N rows" |
+| `/database/tables/<schema>/<name>` | One table: its columns and its first 100 rows |
+| `/database/sql` | A read-only SQL console; `?schema=<s>&name=<n>` prefills a `SELECT` from that table |
+
+Any workspace member can use them. There's no per-table access, because database access follows
+workspace role.
+
+**Every preview and console query runs read-only, as a viewer, whatever your role.** Each one
+gets a fresh lease of the workspace's read-only group, inside `BEGIN READ ONLY`, with these limits:
+
+- one statement;
+- a 30-second `statement_timeout`;
+- at most 1,000 rows or 5 MiB, with a "truncated" notice past either;
+- one running query per person, which they can cancel;
+- your own workspace's database only.
+
+The lease is dropped as soon as the query ends, cancelled or not. Each query writes one audit log
+line with who ran it, the workspace, the duration, the outcome and the query text. Values come back
+JSON-safe: `bigint` and `numeric` as exact text, timestamps as PostgreSQL's text, `bytea` cut to 64
+bytes.
+
+**booth-catalog lists the tables from events.** Every `tableEvents.interval` (default 5 minutes),
+and when someone opens the Tables tab, the module compares each workspace database with what it
+last published. It then publishes `database.table.created`, `updated` (the shape changed) or
+`deleted` on the event bus (`booth.<workspace>.database.table.*`). A change in the row estimate
+alone republishes at most once an hour. The manifest declares `events: {publish:
+[database.table.*]}`, so booth-core delivers the `booth-event-bus-credentials` Secret, and the pod
+waits for it. `eventBus.enabled=false` turns the events off and leaves the tabs working.
+
+The module keeps the last-published state, which includes workspace slugs, in a private
+`booth_database` schema of its admin maintenance database. Design, payload fields and judgment
+calls: [`docs/decisions/0006-tables-preview-sql.md`](docs/decisions/0006-tables-preview-sql.md).
 
 ## Backup and restore (bundled mode)
 

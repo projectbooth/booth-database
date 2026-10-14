@@ -91,6 +91,10 @@ type Provisioner struct {
 
 	mu    sync.Mutex
 	ready map[string]naming.Workspace // databases known fully provisioned, by slug
+	// ADR 0116's table-events state (state.go): whether its schema exists, and which slugs are
+	// already recorded for the reconcile loop.
+	stateReady bool
+	remembered map[string]bool
 }
 
 // New opens the admin pool. adminDSN points at a maintenance database (normally `postgres`)
@@ -111,7 +115,7 @@ func New(ctx context.Context, adminDSN string, opts Options) (*Provisioner, erro
 	if err != nil {
 		return nil, fmt.Errorf("opening admin pool: %w", err)
 	}
-	return &Provisioner{pool: pool, connCfg: poolCfg.ConnConfig, opts: opts, ready: map[string]naming.Workspace{}}, nil
+	return &Provisioner{pool: pool, connCfg: poolCfg.ConnConfig, opts: opts, ready: map[string]naming.Workspace{}, remembered: map[string]bool{}}, nil
 }
 
 // Close releases the admin pool.
@@ -262,6 +266,8 @@ func (p *Provisioner) Issue(ctx context.Context, ws, leaseID string, readWrite b
 	if err != nil {
 		return Lease{}, err
 	}
+	// So the database.table.* reconcile loop (ADR 0116) visits this workspace. Best effort.
+	p.rememberQuietly(ctx, ws)
 	role, err := naming.LeaseRole(leaseID)
 	if err != nil {
 		return Lease{}, err

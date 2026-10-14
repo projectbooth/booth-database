@@ -1,6 +1,6 @@
-// Package api is booth-database's user-facing, read-only admin API (ADR 0093), reached through
-// booth-core's gateway at /modules/database/api/*. Two GET routes, each with its own gate, both
-// behind internal/auth's real token verification and ADR 0041 role derivation:
+// Package api is booth-database's user-facing API (ADR 0093, ADR 0116), reached through
+// booth-core's gateway at /modules/database/api/*. Every route has its own gate, all behind
+// internal/auth's real token verification and ADR 0041 role derivation:
 //
 //   - GET /api/status: owners of the active workspace (docs/decisions/0004 §2) — that
 //     workspace's own database, or "not provisioned yet".
@@ -9,9 +9,14 @@
 //     checked on its own, independent of the caller's role in the workspace they're acting in
 //     ("orthogonal to workspace role", ADR 0094's clarification; docs/decisions/0005). Nobody
 //     else can call it.
+//   - Any member of the active workspace (ADR 0116, tables.go): GET /api/tables (the workspace
+//     database's tables, views and columns), GET /api/tables/preview (a table's first rows),
+//     POST /api/query (the read-only SQL console) and DELETE /api/query (cancel your running
+//     query). Previews and console queries run as a read-only lease whatever the caller's role
+//     (internal/query).
 //
 // Nothing here writes anything: no route provisions, drops or alters a database (ADR 0093, and
-// ADR 0089's accepted "deletion unhandled" call).
+// ADR 0089's accepted "deletion unhandled" call), and the console can't write (internal/query).
 package api
 
 import (
@@ -39,6 +44,12 @@ type Deps struct {
 	// identity provider, but the admin view must never run without one.
 	Verifier func() auth.TokenVerifier
 	Source   StatusSource
+	// Tables, Query and Nudge back ADR 0116's routes (tables.go). Nil Tables or Query leaves
+	// those routes out (404).
+	Tables TablesSource
+	Query  QueryRunner
+	// Nudge asks the database.table.* reconcile loop for an early pass over a workspace; may be nil.
+	Nudge func(ws string)
 }
 
 // NewHandler builds the /api/* routes. Each route gets its own gate rather than one blanket
@@ -53,6 +64,17 @@ func NewHandler(d Deps) http.Handler {
 	protected := http.NewServeMux()
 	protected.Handle("/api/status", d.requireOwner(statusMux))
 	protected.Handle("/api/databases", d.requireOperator(databasesMux))
+	if d.Tables != nil && d.Query != nil {
+		membersMux := http.NewServeMux()
+		membersMux.HandleFunc("GET /api/tables", d.listTables)
+		membersMux.HandleFunc("GET /api/tables/preview", d.previewTable)
+		membersMux.HandleFunc("POST /api/query", d.runQuery)
+		membersMux.HandleFunc("DELETE /api/query", d.cancelQuery)
+		members := d.requireMember(membersMux)
+		protected.Handle("/api/tables", members)
+		protected.Handle("/api/tables/", members)
+		protected.Handle("/api/query", members)
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

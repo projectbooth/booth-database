@@ -71,6 +71,16 @@ type Config struct {
 	// OIDC verifies callers of the read-only admin API (ADR 0093). An empty IssuerURL leaves the
 	// API answering 503; the credential-broker path never depends on it.
 	OIDC auth.OIDCConfig
+
+	// NATSURL is the event bus (ADR 0021) database.table.* events go to (ADR 0116). Empty
+	// disables them; nothing else depends on the bus.
+	NATSURL string
+	// NATSCredsFile is booth-core's minted ".creds" file for this module's declared `events`
+	// (ADR 0050), mounted from the booth-event-bus-credentials Secret.
+	NATSCredsFile string
+	// TableEventsInterval is how often every known workspace database is reconciled against what
+	// was last published (ADR 0116 §2). Default 5 minutes.
+	TableEventsInterval time.Duration
 }
 
 // Load reads configuration from the environment.
@@ -164,6 +174,18 @@ func Load() (Config, error) {
 	// otherwise believe it still grants (or limits) access.
 	if os.Getenv("BOOTH_DATABASE_OPERATOR_WORKSPACES") != "" {
 		return Config{}, fmt.Errorf("BOOTH_DATABASE_OPERATOR_WORKSPACES is no longer supported: platform operators are identified by the /platform/operator groups claim (ADR 0094)")
+	}
+
+	cfg.NATSURL = os.Getenv("BOOTH_NATS_URL")
+	cfg.NATSCredsFile = os.Getenv("BOOTH_NATS_CREDS_FILE")
+	if cfg.NATSCredsFile != "" && cfg.NATSURL == "" {
+		return Config{}, fmt.Errorf("BOOTH_NATS_CREDS_FILE is set but BOOTH_NATS_URL is not: the credentials have no bus to connect to")
+	}
+	if cfg.TableEventsInterval, err = durationEnv("BOOTH_DATABASE_TABLE_EVENTS_INTERVAL", 5*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.TableEventsInterval < 10*time.Second {
+		return Config{}, fmt.Errorf("BOOTH_DATABASE_TABLE_EVENTS_INTERVAL must be at least 10s, got %s", cfg.TableEventsInterval)
 	}
 
 	cfg.PinStatefulSet = os.Getenv("BOOTH_DATABASE_PIN_STATEFULSET")
