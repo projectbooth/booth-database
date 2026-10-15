@@ -1,6 +1,6 @@
 import type { MouseEvent, ReactNode } from "react";
-import { navigate, routePath, type Route } from "./navigation";
-import type { CellValue, QueryResult } from "./types";
+import { API_MODULE_PATH, navigate, navigateTo, routePath, type Route } from "./navigation";
+import type { CellValue, QueryResult, WriteAccess } from "./types";
 
 // Shared pieces. Every class name is a complete static string, and every colour has its dark:
 // pair: booth-design builds one stylesheet by scanning this package's compiled JS (ADR 0097).
@@ -112,4 +112,26 @@ export function truncatedMessage(result: QueryResult): string {
     default:
       return "Some long values were shortened for display.";
   }
+}
+
+/** ADR 0117's "Writable through an API" badge: links to the API page, naming the API when the
+ *  grant id says which. Read-only: writes are turned off on the API page. */
+export function WritableBadge({ access }: { access: WriteAccess }) {
+  const label = access.api ? `Writable through API ${access.api}` : "Writable through an API";
+  const detail = `${access.operations.join(", ")}${access.columns.length ? ` · columns: ${access.columns.join(", ")}` : ""}`;
+  const onClick = (ev: MouseEvent<HTMLAnchorElement>) => {
+    if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    ev.preventDefault();
+    navigateTo(API_MODULE_PATH);
+  };
+  return (
+    <a
+      href={API_MODULE_PATH}
+      onClick={onClick}
+      title={detail}
+      className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 hover:underline dark:border-amber-700 dark:bg-amber-950 dark:text-amber-300"
+    >
+      {label}
+    </a>
+  );
 }

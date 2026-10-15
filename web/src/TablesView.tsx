@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { listTables, previewTable, type ApiContext } from "./api/client";
-import { Alert, Link, Muted, Panel, ResultGrid, ResultSummary, tableEl, tableShell, tbody, td, th, thead } from "./components";
+import { Alert, Link, Muted, Panel, ResultGrid, ResultSummary, tableEl, tableShell, tbody, td, th, thead, WritableBadge } from "./components";
 import { formatApproxRows, kindLabel } from "./format";
 import { useLoad, type LoadState } from "./hooks";
 import type { Relation, TablesResponse } from "./types";
@@ -77,7 +77,10 @@ function TablesBody({ state, q }: { state: LoadState<TablesResponse>; q: string 
               <tr key={`${r.schema}\u0000${r.name}`}>
                 <td className={`${td} text-slate-500 dark:text-slate-400`}>{r.schema}</td>
                 <td className={`${td} font-medium`}>
-                  <Link to={{ name: "table", schema: r.schema, table: r.name }}>{r.name}</Link>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Link to={{ name: "table", schema: r.schema, table: r.name }}>{r.name}</Link>
+                    {r.writableThrough?.map((a) => <WritableBadge key={a.grant} access={a} />)}
+                  </span>
                 </td>
                 <td className={`${td} text-slate-600 dark:text-slate-300`}>{kindLabel(r.kind)}</td>
                 <td className={`${td} text-right tabular-nums text-slate-600 dark:text-slate-300`}>{r.kind === "view" ? "—" : formatApproxRows(r.approxRows)}</td>
@@ -130,6 +133,19 @@ export function TablePage({ api, schema, table }: { api: ApiContext; schema: str
 
       {list.state.status === "error" && <Alert>Couldn&apos;t load the table: {list.state.error}</Alert>}
       {list.state.status === "ready" && !rel && <Alert>There&apos;s no table called {`${schema}.${table}`} in this workspace&apos;s database.</Alert>}
+      {rel?.writableThrough && rel.writableThrough.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {rel.writableThrough.map((a) => (
+            <p key={a.grant} className="flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+              <WritableBadge access={a} />
+              <span>
+                {a.operations.join(", ")}
+                {a.columns.length > 0 && <> · columns {a.columns.join(", ")}</>}
+              </span>
+            </p>
+          ))}
+        </div>
+      )}
       {rel && <ColumnsTable rel={rel} />}
 
       <div className="flex flex-col gap-2">

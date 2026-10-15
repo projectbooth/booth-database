@@ -1,7 +1,7 @@
 # Design note: a table-scoped write role (ADR 0117 point 4)
 
-Date: 2026-10-14. Status: **design only, for coordinator review.** No code, chart or contract
-change yet. Builds on 0001 §3 (groups and lease roles), 0003 (TTL floor), 0006 (Tables view,
+Date: 2026-10-14. Status: **built** with the coordinator's rulings (ADR 0117 "Reconciled
+design"); what was built and where it differs from this note: `docs/decisions/0008`. Builds on 0001 §3 (groups and lease roles), 0003 (TTL floor), 0006 (Tables view,
 `booth_database` state) and 0007 (ignore list).
 
 ## §1 Role structure, and keeping it correct across migrations

@@ -56,6 +56,20 @@ export interface Relation {
   /** The planner's estimate, null when there is none (never analyzed) or for a view. Show as "about N". */
   approxRows: number | null;
   schemaHash: string;
+  /** ADR 0117: the API write grants that can change this table, from the database's live
+   *  privileges. Absent when none. Only in GET /api/tables, never in table events. */
+  writableThrough?: WriteAccess[];
+}
+
+/** One API write grant's live privileges on a table. */
+export interface WriteAccess {
+  /** booth-api's grant id. */
+  grant: string;
+  /** The API the grant belongs to, when the grant id names one ("api:<id>"). */
+  api?: string;
+  operations: ("insert" | "update" | "delete")[];
+  /** The columns it may insert or update. */
+  columns: string[];
 }
 
 /** GET /api/tables */

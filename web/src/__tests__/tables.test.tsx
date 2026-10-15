@@ -134,6 +134,49 @@ describe("Tables tab", () => {
   });
 });
 
+describe("Writable through an API (ADR 0117)", () => {
+  const GRANTED: Relation = {
+    ...PLAYERS,
+    writableThrough: [{ grant: "api:finance-api", api: "finance-api", operations: ["insert", "update"], columns: ["name"] }],
+  };
+  const OTHER: Relation = { ...VIEW, writableThrough: [{ grant: "manual-grant", operations: ["delete"], columns: [] }] };
+
+  it("badges writable tables, names the API, and links to the API page without a reload", async () => {
+    mockFetch({ "GET /modules/database/api/tables": () => ({ json: { workspace: "acme", provisioned: true, tables: [GRANTED, OTHER] } }) });
+    at("/database/tables");
+    mount();
+    const badge = await screen.findByRole("link", { name: "Writable through API finance-api" });
+    expect(badge).toHaveAttribute("href", "/apis");
+    expect(screen.getByRole("link", { name: "Writable through an API" })).toBeInTheDocument();
+    const pop = vi.fn();
+    window.addEventListener("popstate", pop);
+    await userEvent.click(badge);
+    window.removeEventListener("popstate", pop);
+    expect(window.location.pathname).toBe("/apis");
+    expect(pop).toHaveBeenCalled();
+  });
+
+  it("shows the grant's operations and columns on the table page, and no revoke control", async () => {
+    mockFetch({
+      "GET /modules/database/api/tables": () => ({ json: { workspace: "acme", provisioned: true, tables: [GRANTED] } }),
+      "GET /modules/database/api/tables/preview": () => ({ json: RESULT }),
+    });
+    at("/database/tables/nfl_data/players");
+    mount("owner");
+    expect(await screen.findByRole("link", { name: "Writable through API finance-api" })).toBeInTheDocument();
+    expect(screen.getByText(/insert, update/)).toHaveTextContent("insert, update · columns name");
+    expect(screen.queryByRole("button", { name: /revoke/i })).toBeNull();
+  });
+
+  it("shows no badge on tables nothing can write", async () => {
+    mockFetch({ "GET /modules/database/api/tables": () => ({ json: { workspace: "acme", provisioned: true, tables: [PLAYERS] } }) });
+    at("/database/tables");
+    mount();
+    await screen.findByRole("link", { name: "players" });
+    expect(screen.queryByText(/Writable through/)).toBeNull();
+  });
+});
+
 describe("table page", () => {
   it("shows columns and a preview, and links to the console prefilled", async () => {
     at("/database/tables/nfl_data/players");

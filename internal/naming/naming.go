@@ -32,6 +32,10 @@ const (
 	// LeasePrefix starts every short-lived login role minted for one credential-broker lease. The
 	// reaper only ever drops roles with this prefix.
 	LeasePrefix = "bdb_lease_"
+	// WriteGroupPrefix starts every table-scoped write group (ADR 0117): one NOLOGIN role per
+	// (workspace database, grant), holding DML on the grant's declared tables only. The reaper's
+	// write-group sweep only ever drops roles with this prefix.
+	WriteGroupPrefix = "bdb_w_"
 
 	readWriteSuffix = "_rw"
 	readOnlySuffix  = "_ro"
@@ -80,6 +84,9 @@ func (w Workspace) GroupFor(readWrite bool) string {
 // one of this module's group roles. Used by the reaper, which only has a lease role's group
 // membership to go on (the slug is never stored).
 func DatabaseForGroup(name string) string {
+	if db := DatabaseForWriteGroup(name); db != "" {
+		return db
+	}
 	if !strings.HasPrefix(name, DatabasePrefix) {
 		return ""
 	}
@@ -90,6 +97,27 @@ func DatabaseForGroup(name string) string {
 	}
 	return ""
 }
+
+// WriteGroup is the table-scoped write group for one grant in a workspace database:
+// bdb_w_<the database's 24-hex hash>_<16 hex of a domain-separated hash of (database, grant)>.
+// Both parts are hashes because pg_roles is a shared catalog every workspace can read: the name
+// must reveal neither the workspace nor the grant id.
+func (w Workspace) WriteGroup(grant string) string {
+	sum := sha256.Sum256([]byte("booth-database/write-grant/" + w.Database + "/" + grant))
+	return WriteGroupPrefix + strings.TrimPrefix(w.Database, DatabasePrefix) + "_" + hex.EncodeToString(sum[:])[:16]
+}
+
+// DatabaseForWriteGroup inverts WriteGroup's first part: the workspace database a write group
+// belongs to, or "" if name isn't a write group.
+func DatabaseForWriteGroup(name string) string {
+	rest, ok := strings.CutPrefix(name, WriteGroupPrefix)
+	if !ok || len(rest) != 24+1+16 || rest[24] != '_' || !isHex(rest[:24]) || !isHex(rest[25:]) {
+		return ""
+	}
+	return DatabasePrefix + rest[:24]
+}
+
+func isHex(s string) bool { return strings.Trim(s, "0123456789abcdef") == "" }
 
 // ReadWriteGroup returns the readwrite group role for a workspace database name.
 func ReadWriteGroup(database string) string { return database + readWriteSuffix }

@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/projectbooth/booth-database/internal/naming"
+	"github.com/projectbooth/booth-database/internal/tables"
 )
 
 // readyMarker is written as a workspace database's COMMENT once it is fully set up, so a
@@ -79,6 +80,12 @@ type Options struct {
 	// LeaseConnectionLimit is each lease role's CONNECTION LIMIT, so one issued credential can't
 	// exhaust the server's max_connections on its own. <= 0 means 10.
 	LeaseConnectionLimit int
+	// WriteDeny lists tables that can never be granted to a tablewrite lease (ADR 0117): the
+	// chart's tableEvents.ignore. Nil denies nothing beyond the system schemas.
+	WriteDeny *tables.IgnoreList
+	// WriteGroupIdle is how long the reaper keeps a write group with no members after its last
+	// issuance. <= 0 means DefaultWriteGroupIdle.
+	WriteGroupIdle time.Duration
 	// Now is overridable in tests.
 	Now func() time.Time
 }
@@ -95,6 +102,10 @@ type Provisioner struct {
 	// already recorded for the reconcile loop.
 	stateReady bool
 	remembered map[string]bool
+
+	// sweepOnly, when set (tests only), limits SweepWriteGroups to the groups it accepts, so a
+	// test that moves its clock forward never sweeps another test's groups on a shared server.
+	sweepOnly func(group string) bool
 }
 
 // New opens the admin pool. adminDSN points at a maintenance database (normally `postgres`)
@@ -268,6 +279,18 @@ func (p *Provisioner) Issue(ctx context.Context, ws, leaseID string, readWrite b
 	}
 	// So the database.table.* reconcile loop (ADR 0116) visits this workspace. Best effort.
 	p.rememberQuietly(ctx, ws)
+	var settings []string
+	if !readWrite {
+		// Belt and braces: the read-only group already has no write privilege anywhere.
+		settings = append(settings, "default_transaction_read_only = on")
+	}
+	return p.createLease(ctx, n, leaseID, n.GroupFor(readWrite), settings, ttl)
+}
+
+// createLease mints the login role for one lease: a member of group only, good for n's database
+// until ttl from now, with group as its session role and settings (each "name = value", values
+// already quoted) as per-role defaults.
+func (p *Provisioner) createLease(ctx context.Context, n naming.Workspace, leaseID, group string, settings []string, ttl time.Duration) (Lease, error) {
 	role, err := naming.LeaseRole(leaseID)
 	if err != nil {
 		return Lease{}, err
@@ -281,7 +304,6 @@ func (p *Provisioner) Issue(ctx context.Context, ws, leaseID string, readWrite b
 		return Lease{}, err
 	}
 	expires := p.opts.Now().Add(ttl).UTC().Truncate(time.Millisecond)
-	group := n.GroupFor(readWrite)
 
 	stmts := []string{
 		fmt.Sprintf("CREATE ROLE %s WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT %d VALID UNTIL %s PASSWORD %s IN ROLE %s",
@@ -290,9 +312,8 @@ func (p *Provisioner) Issue(ctx context.Context, ws, leaseID string, readWrite b
 		"ALTER ROLE " + ident(role) + " SET role = " + literal(group),
 		"COMMENT ON ROLE " + ident(role) + " IS " + literal(leaseComment),
 	}
-	if !readWrite {
-		// Belt and braces: the read-only group already has no write privilege anywhere.
-		stmts = append(stmts, "ALTER ROLE "+ident(role)+" SET default_transaction_read_only = on")
+	for _, s := range settings {
+		stmts = append(stmts, "ALTER ROLE "+ident(role)+" SET "+s)
 	}
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -347,6 +368,14 @@ func (p *Provisioner) Reap(ctx context.Context) (int, error) {
 			continue
 		}
 		dropped++
+	}
+	// Then write groups whose last lease has gone (ADR 0117): no grant outlives its last lease.
+	if n, err := p.SweepWriteGroups(ctx, p.opts.WriteGroupIdle); err != nil {
+		if ctx.Err() == nil {
+			log.Printf("reaper: %v", err)
+		}
+	} else if n > 0 {
+		log.Printf("reaper: dropped %d idle write group(s)", n)
 	}
 	return dropped, nil
 }
