@@ -7,9 +7,11 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/projectbooth/booth-database/internal/auth"
+	"github.com/projectbooth/booth-database/internal/provision"
 	"github.com/projectbooth/booth-database/internal/query"
 	"github.com/projectbooth/booth-database/internal/tables"
 )
@@ -18,6 +20,9 @@ import (
 type TablesSource interface {
 	IntrospectWorkspace(ctx context.Context, ws string) ([]tables.Relation, bool, error)
 	RememberWorkspace(ctx context.Context, ws string) error
+	// WriteAccess is every table some tablewrite grant (ADR 0117) can change, from the
+	// database's live ACLs.
+	WriteAccess(ctx context.Context, ws string) ([]provision.TableWriteAccess, error)
 }
 
 // QueryRunner is internal/query's Executor.
@@ -42,9 +47,26 @@ func (d Deps) requireMember(next http.Handler) http.Handler {
 }
 
 type tablesResponse struct {
-	Workspace   string            `json:"workspace"`
-	Provisioned bool              `json:"provisioned"`
-	Tables      []tables.Relation `json:"tables"`
+	Workspace   string           `json:"workspace"`
+	Provisioned bool             `json:"provisioned"`
+	Tables      []listedRelation `json:"tables"`
+}
+
+// listedRelation is a Relation as the Tables view lists it: the Catalog's fields, plus which
+// APIs can write to it. The extra field is the view's only: events carry tables.Relation alone.
+type listedRelation struct {
+	tables.Relation
+	WritableThrough []writeAccess `json:"writableThrough,omitempty"`
+}
+
+// writeAccess is one tablewrite grant's live privileges on a table, for the read-only "Writable
+// through an API" badge. API is the grant id's part after "api:" when it has that form
+// (booth-api's grant ids), so the badge can name it; empty otherwise.
+type writeAccess struct {
+	Grant      string   `json:"grant"`
+	API        string   `json:"api,omitempty"`
+	Operations []string `json:"operations"`
+	Columns    []string `json:"columns"`
 }
 
 func (d Deps) listTables(w http.ResponseWriter, r *http.Request) {
@@ -55,8 +77,29 @@ func (d Deps) listTables(w http.ResponseWriter, r *http.Request) {
 		auth.WriteError(w, http.StatusBadGateway, "the database server couldn't be reached")
 		return
 	}
-	if rels == nil {
-		rels = []tables.Relation{}
+	listed := make([]listedRelation, len(rels))
+	for i, rel := range rels {
+		listed[i].Relation = rel
+	}
+	if provisioned {
+		// Which tables an API can write to (ADR 0117). Best effort: the listing is still right
+		// without it, so a failure here only drops the badges.
+		access, err := d.Tables.WriteAccess(r.Context(), id.Workspace)
+		if err != nil {
+			log.Printf("api: reading write grants for workspace %s: %v", id.Workspace, err)
+		}
+		byKey := map[tables.Key][]writeAccess{}
+		for _, a := range access {
+			api, _ := strings.CutPrefix(a.Grant, "api:")
+			if api == a.Grant {
+				api = ""
+			}
+			k := tables.Key{Schema: a.Schema, Name: a.Name}
+			byKey[k] = append(byKey[k], writeAccess{Grant: a.Grant, API: api, Operations: a.Operations, Columns: a.Columns})
+		}
+		for i := range listed {
+			listed[i].WritableThrough = byKey[listed[i].Relation.Key()]
+		}
 	}
 	if provisioned {
 		// Opening the Tables view is also a reconcile trigger (ADR 0116 §2), so a table created
@@ -68,7 +111,7 @@ func (d Deps) listTables(w http.ResponseWriter, r *http.Request) {
 			d.Nudge(id.Workspace)
 		}
 	}
-	writeJSON(w, tablesResponse{Workspace: id.Workspace, Provisioned: provisioned, Tables: rels})
+	writeJSON(w, tablesResponse{Workspace: id.Workspace, Provisioned: provisioned, Tables: listed})
 }
 
 func (d Deps) previewTable(w http.ResponseWriter, r *http.Request) {

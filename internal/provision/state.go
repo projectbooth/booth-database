@@ -2,6 +2,7 @@ package provision
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -38,6 +39,15 @@ CREATE TABLE IF NOT EXISTS booth_database.published_tables (
   approx_rows  bigint,
   published_at timestamptz NOT NULL,
   PRIMARY KEY (workspace, schema_name, table_name)
+);
+CREATE TABLE IF NOT EXISTS booth_database.write_grants (
+  group_role        text PRIMARY KEY,
+  workspace         text NOT NULL,
+  grant_id          text NOT NULL,
+  tables            jsonb NOT NULL,
+  last_issued       timestamptz NOT NULL,
+  last_subject      text NOT NULL,
+  last_on_behalf_of text NOT NULL
 );
 REVOKE ALL ON ALL TABLES IN SCHEMA booth_database FROM PUBLIC;`
 
@@ -182,4 +192,56 @@ func (p *Provisioner) WithEventsLock(ctx context.Context, ws string, fn func(con
 		_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock(hashtext($1))", key)
 	}()
 	return fn(ctx)
+}
+
+// recordWriteGrant records a tablewrite issuance (ADR 0117): which grant id a write group is
+// for (its name is a one-way hash of it), what was granted and who asked. For the Tables view
+// and for audit only; PostgreSQL's ACLs are the authority. Best effort, like RememberWorkspace.
+func (p *Provisioner) recordWriteGrant(ctx context.Context, ws, grant, group string, granted []GrantedTable, audit WriteAudit) {
+	err := p.ensureState(ctx)
+	if err == nil {
+		var body []byte
+		if body, err = json.Marshal(granted); err == nil {
+			_, err = p.pool.Exec(ctx, `
+				INSERT INTO booth_database.write_grants
+				       (group_role, workspace, grant_id, tables, last_issued, last_subject, last_on_behalf_of)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				ON CONFLICT (group_role) DO UPDATE SET tables = EXCLUDED.tables, last_issued = EXCLUDED.last_issued,
+				       last_subject = EXCLUDED.last_subject, last_on_behalf_of = EXCLUDED.last_on_behalf_of`,
+				group, ws, grant, body, p.opts.Now().UTC(), audit.Subject, audit.OnBehalfOf)
+		}
+	}
+	if err != nil && ctx.Err() == nil {
+		log.Printf("write grants: couldn't record an issuance (the grant itself is in place): %v", err)
+	}
+}
+
+func (p *Provisioner) forgetWriteGrant(ctx context.Context, group string) {
+	err := p.ensureState(ctx)
+	if err == nil {
+		_, err = p.pool.Exec(ctx, "DELETE FROM booth_database.write_grants WHERE group_role = $1", group)
+	}
+	if err != nil && ctx.Err() == nil {
+		log.Printf("write grants: couldn't forget a dropped write group: %v", err)
+	}
+}
+
+// writeGrantIDs maps write group role names to their recorded grant ids. Empty on error.
+func (p *Provisioner) writeGrantIDs(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	if err := p.ensureState(ctx); err != nil {
+		return out
+	}
+	rows, err := p.pool.Query(ctx, "SELECT group_role, grant_id FROM booth_database.write_grants")
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var g, id string
+		if rows.Scan(&g, &id) == nil {
+			out[g] = id
+		}
+	}
+	return out
 }

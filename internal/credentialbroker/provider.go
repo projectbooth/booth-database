@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -39,9 +40,14 @@ const (
 	kindPostgres    = "postgres"
 	accessRead      = "read"
 	accessReadWrite = "readwrite"
+	// accessTableWrite is ADR 0117's table-scoped write lease: DML on the tables named in
+	// scope.write only, never the workspace's _rw. It requires scope.write, and scope.write is
+	// refused with any other access value, so a request built wrongly anywhere can only fail.
+	accessTableWrite = "tablewrite"
 
-	// maxRequestBytes bounds a provider request body; a legitimate one is a few short strings.
-	maxRequestBytes = 16 << 10
+	// maxRequestBytes bounds a provider request body: a few short strings, or a tablewrite
+	// scope of at most 50 tables and their column lists.
+	maxRequestBytes = 256 << 10
 )
 
 // Issuer is what the handler needs from internal/provision. An interface so the handler's
@@ -49,6 +55,8 @@ const (
 // passes *provision.Provisioner.
 type Issuer interface {
 	Issue(ctx context.Context, ws, leaseID string, readWrite bool, ttl time.Duration) (provision.Lease, error)
+	IssueWrite(ctx context.Context, ws, leaseID string, scope provision.WriteScope, ttl time.Duration, audit provision.WriteAudit) (provision.Lease, []provision.GrantedTable, error)
+	RevokeWrite(ctx context.Context, ws, grant string, audit provision.WriteAudit) (string, error)
 }
 
 // Endpoint is where a requester connects — the host/port a workload pod can reach, which may
@@ -132,6 +140,9 @@ type requester struct {
 	Subject   string `json:"subject"`
 	Workspace string `json:"workspace"`
 	Role      string `json:"role"`
+	// OnBehalfOf is who the requester acts for (ADR 0117: booth-api's apiwrite:<id> sidecar
+	// writing for app:<id>). Recorded in the audit line only, never used to decide anything.
+	OnBehalfOf string `json:"onBehalfOf,omitempty"`
 }
 
 // pgScope is the postgres kind's `scope`. A workspace database is the only thing there is to
@@ -139,7 +150,21 @@ type requester struct {
 // — present only so a caller can state what it expects and have a mismatch refused rather than
 // silently served for a different workspace.
 type pgScope struct {
-	Workspace string `json:"workspace,omitempty"`
+	Workspace string        `json:"workspace,omitempty"`
+	Write     *pgWriteScope `json:"write,omitempty"`
+}
+
+// pgWriteScope is scope.write, for access "tablewrite" only (ADR 0117, docs/decisions/0008).
+// Tables is a pointer so an absent list and an empty one ([], the revoke request) differ.
+type pgWriteScope struct {
+	Grant  string                  `json:"grant"`
+	Tables *[]provision.WriteTable `json:"tables"`
+}
+
+// pgWriteOptions is the only options shape the postgres kind accepts, and only with
+// "tablewrite": {"revoke": true} ends a grant instead of issuing a lease.
+type pgWriteOptions struct {
+	Revoke bool `json:"revoke"`
 }
 
 // pgScopeEcho is echoed back so a client can check it got what it asked for, the same
@@ -148,6 +173,15 @@ type pgScopeEcho struct {
 	Workspace string `json:"workspace"`
 	Database  string `json:"database"`
 	Access    string `json:"access"`
+	// Write echoes what a tablewrite lease was actually granted (or, for a revoke, that the
+	// grant was ended). Absent for read and readwrite.
+	Write *pgWriteEcho `json:"write,omitempty"`
+}
+
+type pgWriteEcho struct {
+	Grant   string                   `json:"grant"`
+	Tables  []provision.GrantedTable `json:"tables"`
+	Revoked bool                     `json:"revoked,omitempty"`
 }
 
 // pgCredential is the minted credential: everything a libpq-style client needs, and nothing
@@ -162,11 +196,11 @@ type pgCredential struct {
 }
 
 type outboundResponse struct {
-	LeaseID    string       `json:"leaseId"`
-	Kind       string       `json:"kind"`
-	ExpiresAt  time.Time    `json:"expiresAt"`
-	Scope      pgScopeEcho  `json:"scope"`
-	Credential pgCredential `json:"credential"`
+	LeaseID    string        `json:"leaseId"`
+	Kind       string        `json:"kind"`
+	ExpiresAt  time.Time     `json:"expiresAt"`
+	Scope      pgScopeEcho   `json:"scope"`
+	Credential *pgCredential `json:"credential"` // null only for a tablewrite revoke
 }
 
 type errorBody struct {
@@ -201,8 +235,8 @@ func (p *provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", fmt.Sprintf("this provider only issues %q credentials", kindPostgres))
 		return
 	}
-	if req.Access != accessRead && req.Access != accessReadWrite {
-		writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("access must be %q or %q", accessRead, accessReadWrite))
+	if req.Access != accessRead && req.Access != accessReadWrite && req.Access != accessTableWrite {
+		writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("access must be %q, %q or %q", accessRead, accessReadWrite, accessTableWrite))
 		return
 	}
 	ws := req.Requester.Workspace
@@ -218,7 +252,7 @@ func (p *provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := sd.Decode(&scope); err != nil {
 			// An unrecognised scope field might have been meant to narrow the grant (a schema, a
 			// table): refuse rather than silently ignore it and hand out something broader.
-			writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "the postgres scope accepts only an optional \"workspace\": "+err.Error())
+			writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "the postgres scope accepts only an optional \"workspace\" and, with access \"tablewrite\", \"write\": "+err.Error())
 			return
 		}
 	}
@@ -226,9 +260,27 @@ func (p *provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "scope.workspace must be the workspace the request was made in")
 		return
 	}
-	if len(req.Options) > 0 && strings.TrimSpace(string(req.Options)) != "{}" && strings.TrimSpace(string(req.Options)) != "null" {
-		writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "the postgres kind takes no options")
+	if req.Access == accessTableWrite && scope.Write == nil {
+		writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "access \"tablewrite\" requires scope.write")
 		return
+	}
+	if req.Access != accessTableWrite && scope.Write != nil {
+		// Never fall back to a whole-database lease for a request that meant to name tables.
+		writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "scope.write is only accepted with access \"tablewrite\"")
+		return
+	}
+	var opts pgWriteOptions
+	if o := strings.TrimSpace(string(req.Options)); o != "" && o != "{}" && o != "null" {
+		if req.Access != accessTableWrite {
+			writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "the postgres kind takes no options")
+			return
+		}
+		od := json.NewDecoder(strings.NewReader(o))
+		od.DisallowUnknownFields()
+		if err := od.Decode(&opts); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "with access \"tablewrite\" the only option is \"revoke\": "+err.Error())
+			return
+		}
 	}
 
 	ttl := time.Duration(req.TTLSeconds) * time.Second
@@ -237,6 +289,11 @@ func (p *provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if ttl < p.MinTTL { // also covers an absent/zero ttlSeconds
 		ttl = p.MinTTL
+	}
+
+	if req.Access == accessTableWrite {
+		p.serveTableWrite(w, r, req, ws, *scope.Write, opts.Revoke, ttl)
+		return
 	}
 
 	leaseID := p.NewLeaseID()
@@ -250,17 +307,93 @@ func (p *provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// This module's half of ADR 0080's audit requirement (core keeps the authoritative,
 	// append-only trail): who, what, when, expiry — never the password. The lease role name is
 	// derived from the lease id, so PostgreSQL's own logs join up with this line.
-	log.Printf("audit: credential issued lease=%s kind=postgres subject=%s workspace=%s role=%s database=%s dbrole=%s access=%s expiresAt=%s",
-		leaseID, req.Requester.Subject, ws, req.Requester.Role, lease.Database, lease.Username, req.Access, lease.ExpiresAt.UTC().Format(time.RFC3339))
+	log.Printf("audit: credential issued lease=%s kind=postgres subject=%s onBehalfOf=%s workspace=%s role=%s database=%s dbrole=%s access=%s expiresAt=%s",
+		leaseID, req.Requester.Subject, req.Requester.OnBehalfOf, ws, req.Requester.Role, lease.Database, lease.Username, req.Access, lease.ExpiresAt.UTC().Format(time.RFC3339))
 
 	writeJSON(w, http.StatusCreated, outboundResponse{
 		LeaseID: leaseID, Kind: kindPostgres, ExpiresAt: lease.ExpiresAt,
 		Scope: pgScopeEcho{Workspace: ws, Database: lease.Database, Access: req.Access},
-		Credential: pgCredential{
+		Credential: &pgCredential{
 			Host: p.Endpoint.Host, Port: p.Endpoint.Port, Database: lease.Database,
 			Username: lease.Username, Password: lease.Password, SSLMode: p.Endpoint.SSLMode,
 		},
 	})
+}
+
+// serveTableWrite issues a tablewrite lease, or, with options.revoke, ends the grant.
+func (p *provider) serveTableWrite(w http.ResponseWriter, r *http.Request, req inboundRequest, ws string, write pgWriteScope, revoke bool, ttl time.Duration) {
+	audit := provision.WriteAudit{Subject: req.Requester.Subject, OnBehalfOf: req.Requester.OnBehalfOf}
+	if write.Tables == nil {
+		writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "scope.write.tables is required ([] only with options.revoke)")
+		return
+	}
+	leaseID := p.NewLeaseID()
+
+	if revoke {
+		if len(*write.Tables) != 0 {
+			writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", "options.revoke requires scope.write.tables to be []")
+			return
+		}
+		if !provision.ValidGrantID(write.Grant) {
+			writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", fmt.Sprintf("scope.write.grant must be 1 to %d characters with no control characters", provision.MaxGrantIDLen))
+			return
+		}
+		database, err := p.Issuer.RevokeWrite(r.Context(), ws, write.Grant, audit)
+		if writeIssueError(w, err, "revoking a write grant", ws) {
+			return
+		}
+		log.Printf("audit: write grant revoked lease=%s kind=postgres subject=%s onBehalfOf=%s workspace=%s role=%s database=%s grant=%q",
+			leaseID, req.Requester.Subject, req.Requester.OnBehalfOf, ws, req.Requester.Role, database, write.Grant)
+		// Nothing is issued, so credential is null and expiresAt is now.
+		writeJSON(w, http.StatusCreated, outboundResponse{
+			LeaseID: leaseID, Kind: kindPostgres, ExpiresAt: time.Now().UTC().Truncate(time.Millisecond),
+			Scope: pgScopeEcho{Workspace: ws, Database: database, Access: accessTableWrite,
+				Write: &pgWriteEcho{Grant: write.Grant, Tables: []provision.GrantedTable{}, Revoked: true}},
+		})
+		return
+	}
+
+	scope := provision.WriteScope{Grant: write.Grant, Tables: *write.Tables}
+	if writeIssueError(w, provision.ValidateWriteScope(scope), "", ws) { // shape first, before any database work
+		return
+	}
+	lease, granted, err := p.Issuer.IssueWrite(r.Context(), ws, leaseID, scope, ttl, audit)
+	if writeIssueError(w, err, "minting a tablewrite postgres lease", ws) {
+		return
+	}
+	summary := make([]string, len(granted))
+	for i, g := range granted {
+		summary[i] = fmt.Sprintf("%s.%s(%s)", g.Schema, g.Name, strings.Join(g.Operations, "+"))
+	}
+	log.Printf("audit: credential issued lease=%s kind=postgres subject=%s onBehalfOf=%s workspace=%s role=%s database=%s dbrole=%s access=%s grant=%q tables=%q expiresAt=%s",
+		leaseID, req.Requester.Subject, req.Requester.OnBehalfOf, ws, req.Requester.Role, lease.Database, lease.Username, accessTableWrite,
+		write.Grant, strings.Join(summary, ","), lease.ExpiresAt.UTC().Format(time.RFC3339))
+	writeJSON(w, http.StatusCreated, outboundResponse{
+		LeaseID: leaseID, Kind: kindPostgres, ExpiresAt: lease.ExpiresAt,
+		Scope: pgScopeEcho{Workspace: ws, Database: lease.Database, Access: accessTableWrite,
+			Write: &pgWriteEcho{Grant: write.Grant, Tables: granted}},
+		Credential: &pgCredential{
+			Host: p.Endpoint.Host, Port: p.Endpoint.Port, Database: lease.Database,
+			Username: lease.Username, Password: lease.Password, SSLMode: p.Endpoint.SSLMode,
+		},
+	})
+}
+
+// writeIssueError answers a tablewrite failure: a *provision.ScopeError is 422 with its message
+// (it names the table and never carries a credential); anything else is 502. Reports whether it
+// wrote a response.
+func writeIssueError(w http.ResponseWriter, err error, what, ws string) bool {
+	if err == nil {
+		return false
+	}
+	var se *provision.ScopeError
+	if errors.As(err, &se) {
+		writeError(w, http.StatusUnprocessableEntity, "scope_not_supported", se.Error())
+		return true
+	}
+	log.Printf("credential broker: %s for workspace %s: %v", what, ws, err)
+	writeError(w, http.StatusBadGateway, "mint_failed", "the workspace database could not be reached to mint a credential")
+	return true
 }
 
 func (p *provider) authenticate(r *http.Request) bool {

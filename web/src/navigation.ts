@@ -105,3 +105,12 @@ export function navigate(route: Route): void {
   window.dispatchEvent(new PopStateEvent("popstate"));
   window.dispatchEvent(new Event(NAVIGATE_EVENT));
 }
+
+/** booth-api's page in the shell (its manifest navPath; not /api, which is booth-core's). */
+export const API_MODULE_PATH = "/apis";
+
+/** Navigates to another module's page inside the shell, without a reload (see navigate). */
+export function navigateTo(path: string): void {
+  window.history.pushState({}, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}

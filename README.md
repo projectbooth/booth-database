@@ -95,6 +95,42 @@ POST <core>/api/credentials   Authorization: Bearer <token>   X-Workspace: <slug
 `options`, is refused with 422 `scope_not_supported` rather than ignored. `readwrite` needs
 editor/owner (core's rule).
 
+### Table-scoped writes: `access: "tablewrite"` (ADR 0117)
+
+For booth-api's write sidecar. The lease can change only the named tables, and only as declared;
+it is never a member of the workspace's `_rw`.
+
+```
+{"kind": "postgres", "access": "tablewrite", "ttlSeconds": 300,
+ "scope": {"workspace": "<slug>",
+           "write": {"grant": "api:<api id>",
+                     "tables": [{"schema": "finance_input", "name": "transactions",
+                                 "operations": ["insert", "update"], "columns": ["amount", "note"]}]}}}
+
+201 scope: {"workspace", "database", "access": "tablewrite",
+            "write": {"grant", "tables": [{"schema", "name", "operations", "columns", "sequences"}]}}
+```
+
+- **What the lease may do:** SELECT, plus the declared operations on each table. Insert and update
+  are allowed only on the listed columns. It may also use the table's sequences. It can't
+  TRUNCATE, run DDL or create temp tables, and it can't touch any other table.
+- **Who it belongs to:** each grant gets its own write group, and every issuance resets that group
+  to exactly the requested scope. Narrowing a grant therefore affects every live lease of it at its
+  next statement.
+- **Refused with 422 `scope_not_supported`:**
+  - `tablewrite` without `scope.write`, or `scope.write` with any other access value;
+  - tables in system schemas or `booth_database`;
+  - tables matching `tableEvents.ignore`;
+  - views and partitions;
+  - tables the workspace doesn't own;
+  - unknown, generated or `GENERATED ALWAYS` identity columns.
+- **Revoke:** `"tables": []` with `"options": {"revoke": true}` ends the grant. Its leases'
+  sessions are ended and the leases and the group are dropped. The answer is 201 with
+  `"credential": null`.
+- **Cleanup:** the reaper drops a write group once its last lease has gone.
+- **The Tables view** shows a read-only "Writable through an API" badge on tables a grant can change.
+- **Details:** [`docs/decisions/0008-table-scoped-write-leases.md`](docs/decisions/0008-table-scoped-write-leases.md).
+
 **Lifetime.** The broker caps what a caller may *ask* for at 5 minutes (ADR 0088), and this provider
 clamps every shorter request **up to its floor, `leases.minTTL` (default 1 hour)**. That's the same
 mechanism booth-storage uses for MinIO's 15-minute floor (ADR 0089 §3). `expiresAt` in the response

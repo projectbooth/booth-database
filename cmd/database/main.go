@@ -47,7 +47,7 @@ func run() error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	prov, err := provision.New(ctx, cfg.AdminDSN, provision.Options{LeaseConnectionLimit: cfg.LeaseConnectionLimit})
+	prov, err := provision.New(ctx, cfg.AdminDSN, provision.Options{LeaseConnectionLimit: cfg.LeaseConnectionLimit, WriteDeny: cfg.TableEventsIgnore})
 	if err != nil {
 		return err
 	}

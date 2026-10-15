@@ -562,6 +562,51 @@ func TestTables_ListsIgnoredTables(t *testing.T) {
 	}
 }
 
+// ADR 0117: a table a tablewrite grant can change carries writableThrough, read from the live
+// ACLs, naming the API when the grant id is "api:<...>"; other tables carry nothing.
+func TestTables_WritableThroughBadge(t *testing.T) {
+	hs := newPGHarness(t, 0)
+	ws := hs.workspace("badge", `
+		CREATE SCHEMA finance_input;
+		CREATE TABLE finance_input.transactions (id bigserial PRIMARY KEY, amount numeric, note text);
+		CREATE TABLE finance_input.other (v int)`)
+	listing := func() map[string]map[string]any {
+		r := hs.do(http.MethodGet, "/api/tables", ws, "viewer", "v", nil)
+		wantCode(t, r, 200, "")
+		got := map[string]map[string]any{}
+		for _, it := range r.Body["tables"].([]any) {
+			m := it.(map[string]any)
+			got[m["schema"].(string)+"."+m["name"].(string)] = m
+		}
+		return got
+	}
+	if _, ok := listing()["finance_input.transactions"]["writableThrough"]; ok {
+		t.Fatal("a badge before any grant")
+	}
+	scope := provision.WriteScope{Grant: "api:finance-api", Tables: []provision.WriteTable{
+		{Schema: "finance_input", Name: "transactions", Operations: []string{"insert", "update"}, Columns: []string{"note", "amount"}},
+	}}
+	if _, _, err := hs.prov.IssueWrite(context.Background(), ws, uuid.NewString(), scope, time.Minute, provision.WriteAudit{}); err != nil {
+		t.Fatal(err)
+	}
+	got := listing()
+	wt, _ := got["finance_input.transactions"]["writableThrough"].([]any)
+	if len(wt) != 1 {
+		t.Fatalf("writableThrough: %v", got["finance_input.transactions"])
+	}
+	b, _ := json.Marshal(wt[0])
+	if string(b) != `{"api":"finance-api","columns":["amount","note"],"grant":"api:finance-api","operations":["insert","update"]}` {
+		t.Errorf("badge: %s", b)
+	}
+	if _, ok := got["finance_input.other"]["writableThrough"]; ok {
+		t.Error("an ungranted table has a badge")
+	}
+	// The listing itself is unchanged for everything else.
+	if got["finance_input.transactions"]["schemaHash"] == "" || got["finance_input.transactions"]["kind"] != "table" {
+		t.Errorf("relation fields: %v", got["finance_input.transactions"])
+	}
+}
+
 func keys(m map[string]map[string]any) []string {
 	out := []string{}
 	for k := range m {
