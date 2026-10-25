@@ -1,8 +1,9 @@
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { getStatus, listDatabases, type ApiContext, type GetAccessToken } from "./api/client";
 import { Link, Muted, Panel } from "./components";
-import { ConsoleView } from "./ConsoleView";
+import { ConsoleDock, ConsoleView, prefillFor } from "./ConsoleView";
 import { formatBytes, formatCreated } from "./format";
+import { HelpTexts } from "./help";
 import { useLoad, type LoadState } from "./hooks";
 import { tabOf, useRoute } from "./navigation";
 import { TablePage, TablesView } from "./TablesView";
@@ -30,8 +31,8 @@ export interface DatabaseAppProps {
  *   - Overview: a read-only status page. Owners see their workspace's database; platform operators
  *     (/platform/operator, ADR 0094) see every workspace's database, whatever their role in the
  *     workspace they're acting in.
- *   - Tables: every table and view in the workspace database, a page per table with its columns
- *     and a 100-row preview. Any member.
+ *   - Tables: every table and view in the workspace database, grouped by schema, a page per table
+ *     with its columns and a 100-row preview, and the SQL console docked below. Any member.
  *   - SQL console: one read-only statement at a time. Any member.
  *
  * Nothing here can create, change or drop anything — deliberately (ADR 0093, ADR 0089, ADR 0116:
@@ -42,6 +43,9 @@ export function DatabaseApp({ workspace, role, theme, getAccessToken }: Database
   const api = useMemo<ApiContext>(() => ({ workspace, getAccessToken }), [workspace, getAccessToken]);
   const route = useRoute();
   const tab = tabOf(route);
+  const [dock, setDock] = useState(() => ({ open: readDockOpen(), prefill: "", key: 0 }));
+  const toggleDock = useCallback(() => setDock((d) => ({ ...d, open: writeDockOpen(!d.open) })), []);
+  const queryTable = useCallback((schema: string, table: string) => setDock((d) => ({ open: writeDockOpen(true), prefill: prefillFor(schema, table), key: d.key + 1 })), []);
 
   return (
     <div data-theme={theme} className="flex flex-col gap-6 text-slate-900 dark:text-slate-100">
@@ -62,11 +66,36 @@ export function DatabaseApp({ workspace, role, theme, getAccessToken }: Database
       </header>
 
       {route.name === "overview" && <Overview api={api} isOwner={role === "owner"} />}
-      {route.name === "tables" && <TablesView api={api} />}
-      {route.name === "table" && <TablePage api={api} schema={route.schema} table={route.table} />}
+      {route.name === "tables" && <TablesView api={api} onQuery={queryTable} />}
+      {route.name === "table" && <TablePage api={api} schema={route.schema} table={route.table} onQuery={queryTable} />}
       {route.name === "sql" && <ConsoleView api={api} schema={route.schema} table={route.table} />}
+      {/* One position for both Tables routes, so the dock (and a running query) survives moving
+          between the list and a table page. */}
+      {tab === "tables" && <ConsoleDock api={api} open={dock.open} onToggle={toggleDock} prefill={dock.prefill} prefillKey={dock.key} />}
+      <HelpTexts />
     </div>
   );
+}
+
+// Whether the docked console is open is a per-browser convenience; storage can be unavailable
+// (private windows, blocked site data), and then it simply starts closed.
+const DOCK_KEY = "booth-database:console-dock-open";
+
+function readDockOpen(): boolean {
+  try {
+    return window.localStorage.getItem(DOCK_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeDockOpen(open: boolean): boolean {
+  try {
+    window.localStorage.setItem(DOCK_KEY, open ? "1" : "0");
+  } catch {
+    // not remembered; fine
+  }
+  return open;
 }
 
 const TABS = [
