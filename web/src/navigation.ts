@@ -16,6 +16,10 @@ import { useSyncExternalStore } from "react";
 //   /database/sql?schema=<s>&name=<n>  the console, prefilled with a SELECT from that table
 //
 // <schema> and <name> are each encodeURIComponent-encoded, so any PostgreSQL name round-trips.
+//
+// ADR 0124: the shell's project picker adds ?project=<slug> to the page URL. It is a list filter,
+// never part of a path: the Tables tab reads it, and in-module links carry it along (hrefFor) so
+// moving between tabs and tables keeps the selection.
 
 export const BASE_PATH = "/database";
 
@@ -80,6 +84,23 @@ export function routePath(route: Route): string {
   }
 }
 
+/** The project slug grammar (contracts/projects.md). Anything else is ignored, as if absent. */
+const PROJECT_SLUG = /^[a-z0-9-]{1,63}$/;
+
+/** The ?project= filter in a query string, or null. */
+export function projectParam(search: string): string | null {
+  const v = new URLSearchParams(search).get("project");
+  return v !== null && PROJECT_SLUG.test(v) ? v : null;
+}
+
+/** A route's href, keeping the current ?project= selection. */
+export function hrefFor(route: Route): string {
+  const project = projectParam(window.location.search);
+  if (project === null) return routePath(route);
+  const path = routePath(route);
+  return `${path}${path.includes("?") ? "&" : "?"}${new URLSearchParams({ project }).toString()}`;
+}
+
 const NAVIGATE_EVENT = "booth-database:navigate";
 
 function subscribe(onChange: () => void): () => void {
@@ -98,10 +119,16 @@ export function useRoute(): Route {
   return parseRoute(pathname, search);
 }
 
+/** The shell's current ?project= selection (ADR 0124), or null for all projects. */
+export function useProjectParam(): string | null {
+  const search = useSyncExternalStore(subscribe, () => window.location.search, () => "");
+  return projectParam(search);
+}
+
 /** Navigates inside the shell without a page reload (a reload would drop booth-design's
  *  in-memory token, ADR 0032): pushState, then a synthetic popstate the shell's router hears. */
 export function navigate(route: Route): void {
-  window.history.pushState({}, "", routePath(route));
+  window.history.pushState({}, "", hrefFor(route));
   window.dispatchEvent(new PopStateEvent("popstate"));
   window.dispatchEvent(new Event(NAVIGATE_EVENT));
 }

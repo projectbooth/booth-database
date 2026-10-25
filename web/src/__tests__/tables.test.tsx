@@ -205,9 +205,9 @@ describe("schema groups", () => {
     expect(screen.getByRole("link", { name: "pg_class" })).toBeInTheDocument();
   });
 
-  it("has no project logic yet: one group, no project heading", () => {
+  it("counts tables and views, and has no project heading without a registry", () => {
     const schemas = groupBySchema([PLAYERS, LEDGER]);
-    expect(groupByProject(schemas)).toEqual([{ project: null, schemas }]);
+    expect(groupByProject(schemas, null, "nfl")).toEqual([{ kind: "none", schemas }]);
     expect(countLabel([PLAYERS, VIEW, { ...VIEW, kind: "materialized_view" }])).toBe("1 table, 2 views");
     expect(countLabel([])).toBe("0 tables");
   });

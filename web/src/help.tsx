@@ -3,6 +3,8 @@
 // title when it ships, using the same texts.
 
 export const HELP = {
+  project: "A project groups schemas for navigation. It doesn't change who can see or change anything.",
+  noProject: "Schemas that aren't bound to a project.",
   schema: "A schema is a named group of tables inside this workspace's database, like a folder.",
   table: "Open this table to see its columns and a preview of its first 100 rows.",
   name: "The table's or view's name inside its schema.",

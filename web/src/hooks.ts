@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { listProjects, listSchemaBindings, type ApiContext } from "./api/client";
+import type { ProjectIndex } from "./grouping";
 
 export type LoadState<T> = { status: "loading" } | { status: "error"; error: string; httpStatus?: number } | { status: "ready"; data: T };
 
@@ -37,4 +39,25 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[], enabled = tr
 
   const reload = useCallback(() => run(false), [run]);
   return { state, reload };
+}
+
+/** How long the Tables tab waits for booth-core's project registry before showing the list
+ *  without project headings (contracts/projects.md: never block the page). */
+export const PROJECTS_TIMEOUT_MS = 5000;
+
+/** Loads booth-core's projects and postgres_schema bindings. Never rejects: 404 (no registry),
+ *  503 (registry not ready), a timeout, an unexpected shape or any other failure is null, and the
+ *  Tables tab then looks exactly as it does without a registry. */
+export async function loadProjectIndex(api: ApiContext): Promise<ProjectIndex | null> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), PROJECTS_TIMEOUT_MS);
+  try {
+    const [projects, bindings] = await Promise.all([listProjects(api, abort.signal), listSchemaBindings(api, abort.signal)]);
+    if (!Array.isArray(projects) || !Array.isArray(bindings)) return null;
+    return { projects, bindings };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }

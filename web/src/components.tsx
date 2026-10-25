@@ -1,5 +1,5 @@
 import type { MouseEvent, ReactNode } from "react";
-import { API_MODULE_PATH, navigate, navigateTo, routePath, type Route } from "./navigation";
+import { API_MODULE_PATH, hrefFor, navigate, navigateTo, type Route } from "./navigation";
 import type { CellValue, QueryResult, WriteAccess } from "./types";
 
 // Shared pieces. Every class name is a complete static string, and every colour has its dark:
@@ -29,7 +29,7 @@ export function Link({
   };
   return (
     <a
-      href={routePath(to)}
+      href={hrefFor(to)}
       onClick={onClick}
       aria-current={current ? "page" : undefined}
       title={title}
