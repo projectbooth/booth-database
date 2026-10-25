@@ -7,14 +7,35 @@ import type { CellValue, QueryResult, WriteAccess } from "./types";
 
 /** An in-shell link: a real href (so open-in-new-tab and copy-link work), navigated without a
  *  page reload on a plain click. */
-export function Link({ to, children, className, current }: { to: Route; children: ReactNode; className?: string; current?: boolean }) {
+export function Link({
+  to,
+  children,
+  className,
+  current,
+  title,
+  "aria-describedby": describedBy,
+}: {
+  to: Route;
+  children: ReactNode;
+  className?: string;
+  current?: boolean;
+  title?: string;
+  "aria-describedby"?: string;
+}) {
   const onClick = (ev: MouseEvent<HTMLAnchorElement>) => {
     if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
     ev.preventDefault();
     navigate(to);
   };
   return (
-    <a href={routePath(to)} onClick={onClick} aria-current={current ? "page" : undefined} className={className ?? "text-indigo-600 hover:underline dark:text-indigo-400"}>
+    <a
+      href={routePath(to)}
+      onClick={onClick}
+      aria-current={current ? "page" : undefined}
+      title={title}
+      aria-describedby={describedBy}
+      className={className ?? "text-indigo-600 hover:underline dark:text-indigo-400"}
+    >
       {children}
     </a>
   );

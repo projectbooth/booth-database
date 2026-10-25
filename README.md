@@ -200,12 +200,18 @@ The same native view has three tabs, each at a stable path booth-catalog links t
 | Path | Page |
 |---|---|
 | `/database` | Overview (the status page above) |
-| `/database/tables` | Every table, view and materialized view in the workspace database: schema, kind, "about N rows" |
+| `/database/tables` | Every table, view and materialized view in the workspace database, grouped under collapsible schema headings: kind, "about N rows" |
 | `/database/tables/<schema>/<name>` | One table: its columns and its first 100 rows |
 | `/database/sql` | A read-only SQL console; `?schema=<s>&name=<n>` prefills a `SELECT` from that table |
 
 Any workspace member can use them. There's no per-table access, because database access follows
 workspace role.
+
+On the Tables tab and a table's page, the same console is also docked at the bottom, collapsed
+until opened; a table's **Query** button puts a `SELECT ... LIMIT 100` of it there. It is the same
+console with the same limits, and the SQL console tab stays. Search covers every schema, including
+collapsed ones. Projects (ADR 0124) will add a heading above schemas once booth-core's registry
+exists; `groupByProject` in `web/src/grouping.ts` is where that goes.
 
 **Every preview and console query runs read-only, as a viewer, whatever your role.** Each one
 gets a fresh lease of the workspace's read-only group, inside `BEGIN READ ONLY`, with these limits:

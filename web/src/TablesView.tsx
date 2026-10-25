@@ -1,13 +1,19 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { listTables, previewTable, type ApiContext } from "./api/client";
 import { Alert, Link, Muted, Panel, ResultGrid, ResultSummary, tableEl, tableShell, tbody, td, th, thead, WritableBadge } from "./components";
 import { formatApproxRows, kindLabel } from "./format";
+import { countLabel, groupByProject, groupBySchema, type SchemaGroup } from "./grouping";
+import { help } from "./help";
 import { useLoad, type LoadState } from "./hooks";
 import type { Relation, TablesResponse } from "./types";
 
+/** Puts a bounded SELECT of one table in the docked console (DatabaseApp owns the dock). */
+export type QueryTable = (schema: string, table: string) => void;
+
 /** The Tables tab (ADR 0116): every table, view and materialized view in the workspace database,
- *  for any member. Opening it also asks the server to check for changes for the Catalog. */
-export function TablesView({ api }: { api: ApiContext }) {
+ *  grouped by schema, for any member. Opening it also asks the server to check for changes for
+ *  the Catalog. */
+export function TablesView({ api, onQuery }: { api: ApiContext; onQuery: QueryTable }) {
   const { state, reload } = useLoad(() => listTables(api), [api]);
   const [q, setQ] = useState("");
 
@@ -35,7 +41,7 @@ export function TablesView({ api }: { api: ApiContext }) {
           </button>
         </div>
       </div>
-      <TablesBody state={state} q={q} />
+      <TablesBody state={state} q={q} onQuery={onQuery} />
     </section>
   );
 }
@@ -46,8 +52,23 @@ function matches(r: Relation, q: string): boolean {
   return `${r.schema}.${r.name}`.toLowerCase().includes(needle) || r.columns.some((c) => c.name.toLowerCase().includes(needle));
 }
 
-function TablesBody({ state, q }: { state: LoadState<TablesResponse>; q: string }) {
-  const filtered = useMemo(() => (state.status === "ready" ? state.data.tables.filter((r) => matches(r, q.trim())) : []), [state, q]);
+function TablesBody({ state, q, onQuery }: { state: LoadState<TablesResponse>; q: string; onQuery: QueryTable }) {
+  const needle = q.trim();
+  const projects = useMemo(
+    () => (state.status === "ready" ? groupByProject(groupBySchema(state.data.tables.filter((r) => matches(r, needle)))) : []),
+    [state, needle],
+  );
+  // Schemas the user has toggled from their default (system schemas start collapsed, the rest
+  // open). A search shows every match whatever is collapsed, so filtering always works across all
+  // schemas.
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = (schema: string) =>
+    setToggled((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(schema)) next.add(schema);
+      return next;
+    });
+
   if (state.status === "loading") return <Muted>Loading tables…</Muted>;
   if (state.status === "error") return <Alert>Couldn&apos;t load tables: {state.error}</Alert>;
   if (!state.data.provisioned) {
@@ -59,38 +80,18 @@ function TablesBody({ state, q }: { state: LoadState<TablesResponse>; q: string 
     );
   }
   if (state.data.tables.length === 0) return <Muted>This database has no tables yet. Create them from a notebook or pipeline task.</Muted>;
+  const empty = projects.every((p) => p.schemas.length === 0);
   return (
     <>
-      <div className={tableShell}>
-        <table className={tableEl}>
-          <thead className={thead}>
-            <tr>
-              <th className={th}>Schema</th>
-              <th className={th}>Name</th>
-              <th className={th}>Kind</th>
-              <th className={`${th} text-right`}>Rows</th>
-              <th className={`${th} text-right`}>Columns</th>
-            </tr>
-          </thead>
-          <tbody className={tbody}>
-            {filtered.map((r) => (
-              <tr key={`${r.schema}\u0000${r.name}`}>
-                <td className={`${td} text-slate-500 dark:text-slate-400`}>{r.schema}</td>
-                <td className={`${td} font-medium`}>
-                  <span className="flex flex-wrap items-center gap-2">
-                    <Link to={{ name: "table", schema: r.schema, table: r.name }}>{r.name}</Link>
-                    {r.writableThrough?.map((a) => <WritableBadge key={a.grant} access={a} />)}
-                  </span>
-                </td>
-                <td className={`${td} text-slate-600 dark:text-slate-300`}>{kindLabel(r.kind)}</td>
-                <td className={`${td} text-right tabular-nums text-slate-600 dark:text-slate-300`}>{r.kind === "view" ? "—" : formatApproxRows(r.approxRows)}</td>
-                <td className={`${td} text-right tabular-nums text-slate-600 dark:text-slate-300`}>{r.columns.length}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {filtered.length === 0 && <Muted>Nothing matches &quot;{q}&quot;.</Muted>}
+      {projects.map((p) => (
+        <div key={p.project ?? ""} className="flex flex-col gap-3">
+          {/* ADR 0124: a project heading goes here once groupByProject returns projects. */}
+          {p.schemas.map((g) => (
+            <SchemaSection key={g.schema} group={g} open={needle !== "" || g.system === toggled.has(g.schema)} onToggle={() => toggle(g.schema)} onQuery={onQuery} />
+          ))}
+        </div>
+      ))}
+      {empty && <Muted>Nothing matches &quot;{q}&quot;.</Muted>}
       <p className="text-xs text-slate-500 dark:text-slate-400">
         Row counts are PostgreSQL&apos;s estimates and can lag behind recent changes.
       </p>
@@ -98,8 +99,92 @@ function TablesBody({ state, q }: { state: LoadState<TablesResponse>; q: string 
   );
 }
 
+function SchemaSection({ group, open, onToggle, onQuery }: { group: SchemaGroup; open: boolean; onToggle: () => void; onQuery: QueryTable }) {
+  const bodyId = useId();
+  return (
+    <section aria-label={`Schema ${group.schema}`} className="flex flex-col gap-2">
+      <h3 className="text-sm">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-controls={bodyId}
+          className="flex items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:hover:bg-slate-800"
+        >
+          <span aria-hidden="true" className="w-3 text-slate-400 dark:text-slate-500">
+            {open ? "▾" : "▸"}
+          </span>
+          <span className="font-mono font-semibold" {...help("schema")}>
+            {group.schema}
+          </span>
+          <span className="text-xs text-slate-500 dark:text-slate-400">{countLabel(group.relations)}</span>
+          {group.system && <span className="text-xs text-slate-500 dark:text-slate-400">· system</span>}
+        </button>
+      </h3>
+      <div id={bodyId} hidden={!open} className={tableShell}>
+        <table className={tableEl}>
+          <thead className={thead}>
+            <tr>
+              <th className={th} {...help("name")}>
+                Name
+              </th>
+              <th className={th} {...help("kind")}>
+                Kind
+              </th>
+              <th className={`${th} text-right`} {...help("rows")}>
+                Rows
+              </th>
+              <th className={`${th} text-right`} {...help("columns")}>
+                Columns
+              </th>
+              <th className={th}>
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody className={tbody}>
+            {group.relations.map((r) => (
+              <tr key={r.name}>
+                <td className={`${td} font-medium`}>
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Link to={{ name: "table", schema: r.schema, table: r.name }} {...help("table")}>
+                      {r.name}
+                    </Link>
+                    {r.writableThrough?.map((a) => <WritableBadge key={a.grant} access={a} />)}
+                  </span>
+                </td>
+                <td className={`${td} text-slate-600 dark:text-slate-300`}>{kindLabel(r.kind)}</td>
+                <td className={`${td} text-right tabular-nums text-slate-600 dark:text-slate-300`}>{r.kind === "view" ? "—" : formatApproxRows(r.approxRows)}</td>
+                <td className={`${td} text-right tabular-nums text-slate-600 dark:text-slate-300`}>{r.columns.length}</td>
+                <td className={`${td} text-right`}>
+                  <QueryButton schema={r.schema} table={r.name} onQuery={onQuery} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/** Opens the docked console with a bounded SELECT of one table. */
+function QueryButton({ schema, table, onQuery }: { schema: string; table: string; onQuery: QueryTable }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onQuery(schema, table)}
+      aria-label={`Query ${schema}.${table} in the console`}
+      title="Put a SELECT of its first 100 rows in the SQL console below."
+      className="rounded-md border border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+    >
+      Query
+    </button>
+  );
+}
+
 /** One table's page: its columns and a preview of its first 100 rows. */
-export function TablePage({ api, schema, table }: { api: ApiContext; schema: string; table: string }) {
+export function TablePage({ api, schema, table, onQuery }: { api: ApiContext; schema: string; table: string; onQuery: QueryTable }) {
   const list = useLoad(() => listTables(api), [api]);
   const preview = useLoad(() => previewTable(api, schema, table), [api, schema, table]);
   const rel = list.state.status === "ready" ? list.state.data.tables.find((r) => r.schema === schema && r.name === table) : undefined;
@@ -110,7 +195,10 @@ export function TablePage({ api, schema, table }: { api: ApiContext; schema: str
         <div>
           <p className="text-xs">
             <Link to={{ name: "tables" }}>Tables</Link>
-            <span className="text-slate-400 dark:text-slate-500"> / {schema}</span>
+            <span className="text-slate-400 dark:text-slate-500">
+              {" / "}
+              <span {...help("schema")}>{schema}</span>
+            </span>
           </p>
           <h2 id="table-heading" className="mt-1 break-all font-mono text-lg font-semibold">
             {schema}.{table}
@@ -123,12 +211,22 @@ export function TablePage({ api, schema, table }: { api: ApiContext; schema: str
             </p>
           )}
         </div>
-        <Link
-          to={{ name: "sql", schema, table }}
-          className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
-        >
-          Open in SQL console
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onQuery(schema, table)}
+            title="Put a SELECT of its first 100 rows in the SQL console below."
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            Query below
+          </button>
+          <Link
+            to={{ name: "sql", schema, table }}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            Open in SQL console
+          </Link>
+        </div>
       </div>
 
       {list.state.status === "error" && <Alert>Couldn&apos;t load the table: {list.state.error}</Alert>}
@@ -172,10 +270,18 @@ function ColumnsTable({ rel }: { rel: Relation }) {
         <table className={tableEl}>
           <thead className={thead}>
             <tr>
-              <th className={th}>Name</th>
-              <th className={th}>Type</th>
-              <th className={th}>Nullable</th>
-              <th className={th}>Comment</th>
+              <th className={th} {...help("columnName")}>
+                Name
+              </th>
+              <th className={th} {...help("columnType")}>
+                Type
+              </th>
+              <th className={th} {...help("nullable")}>
+                Nullable
+              </th>
+              <th className={th} {...help("comment")}>
+                Comment
+              </th>
             </tr>
           </thead>
           <tbody className={tbody}>

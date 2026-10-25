@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prefillFor, quoteIdent } from "../ConsoleView";
 import { DatabaseApp } from "../DatabaseApp";
 import { formatApproxRows } from "../format";
+import { countLabel, groupByProject, groupBySchema, isSystemSchema } from "../grouping";
 import { parseRoute, routePath, type Route } from "../navigation";
 import type { QueryResult, Relation, WorkspaceRole } from "../types";
 
@@ -131,6 +132,162 @@ describe("Tables tab", () => {
     await userEvent.click(await screen.findByRole("link", { name: "players" }));
     expect(window.location.pathname).toBe("/database/tables/nfl_data/players");
     expect(await screen.findByRole("heading", { name: "nfl_data.players" })).toBeInTheDocument();
+  });
+});
+
+describe("schema groups", () => {
+  const GAMES: Relation = { ...PLAYERS, name: "games", schemaHash: "h3" };
+  const LEDGER: Relation = { ...PLAYERS, schema: "finance_dev", name: "ledger", schemaHash: "h4" };
+  const STATE: Relation = { ...PLAYERS, schema: "booth_database", name: "state", schemaHash: "h5" };
+  const tablesReply = (tables: Relation[]) => ({ "GET /modules/database/api/tables": () => ({ json: { workspace: "acme", provisioned: true, tables } }) });
+  const schemaHeadings = () => screen.getAllByRole("button", { name: /table|view/ }).filter((b) => b.hasAttribute("aria-expanded"));
+
+  it("groups by schema with counts, the workspace's schemas first and system schemas last and collapsed", async () => {
+    at("/database/tables");
+    mockFetch(tablesReply([STATE, LEDGER, PLAYERS, GAMES, VIEW]));
+    mount();
+    await screen.findByRole("link", { name: "players" });
+    expect(schemaHeadings().map((b) => [b.textContent, b.getAttribute("aria-expanded")])).toEqual([
+      [expect.stringMatching(/finance_dev1 table$/), "true"],
+      [expect.stringMatching(/nfl_data2 tables$/), "true"],
+      [expect.stringMatching(/public1 view$/), "true"],
+      [expect.stringMatching(/booth_database1 table· system$/), "false"],
+    ]);
+    expect(screen.queryByRole("link", { name: "state" })).toBeNull();
+    const nfl = screen.getByRole("region", { name: "Schema nfl_data" });
+    expect(within(nfl).getAllByRole("link").map((a) => a.textContent)).toEqual(["players", "games"]);
+  });
+
+  it("collapses and expands a schema, and a search finds matches in collapsed schemas", async () => {
+    at("/database/tables");
+    mockFetch(tablesReply([LEDGER, PLAYERS, STATE]));
+    mount();
+    await screen.findByRole("link", { name: "players" });
+    const nflHeading = screen.getByRole("button", { name: /^nfl_data/ });
+    await userEvent.click(nflHeading);
+    expect(nflHeading).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("link", { name: "players" })).toBeNull();
+    expect(screen.getByRole("link", { name: "ledger" })).toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole("searchbox"), "sta");
+    expect(screen.getByRole("link", { name: "state" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Schema finance_dev" })).toBeNull();
+    await userEvent.clear(screen.getByRole("searchbox"));
+    await userEvent.type(screen.getByRole("searchbox"), "players");
+    expect(screen.getByRole("link", { name: "players" })).toBeInTheDocument();
+    await userEvent.clear(screen.getByRole("searchbox"));
+    expect(screen.queryByRole("link", { name: "players" })).toBeNull();
+    expect(screen.getByRole("button", { name: /^nfl_data/ })).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(screen.getByRole("button", { name: /^nfl_data/ }));
+    expect(screen.getByRole("link", { name: "players" })).toBeInTheDocument();
+  });
+
+  it("treats the module's schema and PostgreSQL's own as system, and nothing else", () => {
+    for (const s of ["booth_database", "information_schema", "pg_catalog", "pg_toast", "pg_temp_3", "pg_toast_temp_12"]) expect(isSystemSchema(s)).toBe(true);
+    for (const s of ["public", "nfl_data", "pg_temp", "pg_temp_x", "pg_tempo_1", "postgis", "cron", "PG_CATALOG"]) expect(isSystemSchema(s)).toBe(false);
+    const order = groupBySchema([{ ...PLAYERS, schema: "pg_temp_3" }, { ...PLAYERS, schema: "zeta" }, { ...PLAYERS, schema: "information_schema" }, PLAYERS]);
+    expect(order.map((g) => [g.schema, g.system])).toEqual([
+      ["nfl_data", false],
+      ["zeta", false],
+      ["information_schema", true],
+      ["pg_temp_3", true],
+    ]);
+  });
+
+  it("opens a collapsed system schema on click", async () => {
+    at("/database/tables");
+    mockFetch(tablesReply([PLAYERS, { ...PLAYERS, schema: "pg_catalog", name: "pg_class", schemaHash: "h6" }]));
+    mount();
+    await screen.findByRole("link", { name: "players" });
+    expect(screen.queryByRole("link", { name: "pg_class" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /^pg_catalog/ }));
+    expect(screen.getByRole("link", { name: "pg_class" })).toBeInTheDocument();
+  });
+
+  it("has no project logic yet: one group, no project heading", () => {
+    const schemas = groupBySchema([PLAYERS, LEDGER]);
+    expect(groupByProject(schemas)).toEqual([{ project: null, schemas }]);
+    expect(countLabel([PLAYERS, VIEW, { ...VIEW, kind: "materialized_view" }])).toBe("1 table, 2 views");
+    expect(countLabel([])).toBe("0 tables");
+  });
+});
+
+describe("docked SQL console on the Tables tab", () => {
+  beforeEach(() => window.localStorage.clear());
+  const PREFILL = 'SELECT *\nFROM "nfl_data"."players"\nLIMIT 100';
+
+  it("starts closed, opens prefilled from a table's Query button, runs, and keeps its result on a table page", async () => {
+    at("/database/tables");
+    const calls = mockFetch({
+      "GET /modules/database/api/tables": () => ({ json: { workspace: "acme", provisioned: true, tables: [PLAYERS] } }),
+      "GET /modules/database/api/tables/preview": () => ({ json: { ...RESULT, rows: [[9, "Preview row"]] } }),
+      "POST /modules/database/api/query": () => ({ json: RESULT }),
+    });
+    mount();
+    await screen.findByRole("link", { name: "players" });
+    const toggle = screen.getByRole("button", { name: /^SQL console/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("textbox", { name: "SQL statement" })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Query nfl_data.players in the console" }));
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const editor = screen.getByRole("textbox", { name: "SQL statement" });
+    expect(editor).toHaveValue(PREFILL);
+    expect(editor).toHaveFocus();
+    expect(screen.getByText(/stopped after 30 seconds, and showing at most 1,000 rows/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(await screen.findByText("Ann")).toBeInTheDocument();
+    expect(JSON.parse(calls.find((c) => c.method === "POST")!.body!)).toEqual({ sql: PREFILL });
+    expect(window.localStorage.getItem("booth-database:console-dock-open")).toBe("1");
+
+    await userEvent.click(screen.getByRole("link", { name: "players" }));
+    expect(await screen.findByText("Preview row")).toBeInTheDocument();
+    expect(screen.getByText("Ann")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^SQL console/ }));
+    expect(screen.queryByRole("textbox", { name: "SQL statement" })).toBeNull();
+    expect(window.localStorage.getItem("booth-database:console-dock-open")).toBe("0");
+  });
+
+  it("prefills from a table page and remembers being open; the SQL console tab has no dock", async () => {
+    window.localStorage.setItem("booth-database:console-dock-open", "1");
+    at("/database/tables/nfl_data/players");
+    mockFetch({
+      "GET /modules/database/api/tables": () => ({ json: { workspace: "acme", provisioned: true, tables: [PLAYERS] } }),
+      "GET /modules/database/api/tables/preview": () => ({ json: RESULT }),
+    });
+    mount();
+    const editor = await screen.findByRole("textbox", { name: "SQL statement" });
+    expect(editor).toHaveValue("");
+    await userEvent.click(screen.getByRole("button", { name: "Query below" }));
+    expect(editor).toHaveValue(PREFILL);
+
+    await userEvent.click(within(screen.getByRole("navigation", { name: "Database sections" })).getByRole("link", { name: "SQL console" }));
+    expect(screen.queryByRole("complementary", { name: "SQL console" })).toBeNull();
+    expect(screen.getAllByRole("textbox", { name: "SQL statement" })).toHaveLength(1);
+  });
+});
+
+describe("help text", () => {
+  it("describes column headers, schema and table labels", async () => {
+    at("/database/tables");
+    mockFetch({
+      "GET /modules/database/api/tables": () => ({ json: { workspace: "acme", provisioned: true, tables: [PLAYERS] } }),
+      "GET /modules/database/api/tables/preview": () => ({ json: RESULT }),
+    });
+    mount();
+    const link = await screen.findByRole("link", { name: "players" });
+    expect(link).toHaveAccessibleDescription(/columns and a preview/);
+    expect(link).toHaveAttribute("title", expect.stringMatching(/columns and a preview/));
+    expect(screen.getByRole("columnheader", { name: "Rows" })).toHaveAccessibleDescription(/estimate/);
+    expect(screen.getByRole("columnheader", { name: "Kind" })).toHaveAttribute("title", expect.stringMatching(/^Table: stored rows/));
+    expect(screen.getByText("nfl_data")).toHaveAccessibleDescription(/named group of tables/);
+
+    await userEvent.click(link);
+    expect(await screen.findByRole("columnheader", { name: "Nullable" })).toHaveAccessibleDescription(/left empty/);
+    expect(screen.getByRole("columnheader", { name: "Type" })).toHaveAccessibleDescription(/kind of value/);
+    expect(screen.getByText("nfl_data", { selector: "span" })).toHaveAccessibleDescription(/named group of tables/);
   });
 });
 
