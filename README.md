@@ -210,8 +210,22 @@ workspace role.
 On the Tables tab and a table's page, the same console is also docked at the bottom, collapsed
 until opened; a table's **Query** button puts a `SELECT ... LIMIT 100` of it there. It is the same
 console with the same limits, and the SQL console tab stays. Search covers every schema, including
-collapsed ones. Projects (ADR 0124) will add a heading above schemas once booth-core's registry
-exists; `groupByProject` in `web/src/grouping.ts` is where that goes.
+collapsed ones.
+
+**Projects (ADR 0124)** group schemas under headings, from booth-core's registry
+(`contracts/projects.md`). The browser asks core directly for `GET /api/projects` and
+`GET /api/projects/bindings?kind=postgres_schema`, with the user's token and workspace.
+- A schema is matched to a project by its exact name.
+- A parent project's own schemas come first, above its sub-projects.
+- Archived projects are marked as archived, sort last and start collapsed.
+- Unbound schemas go under "No project", last.
+- The shell's `?project=<slug>` shows only that project and its sub-projects, with nothing
+  unbound. In-module links carry it along.
+
+When core answers 404 or 503, or fails, or takes more than 5 s, or nothing shown is bound to a
+project, the page looks exactly as it does without projects, with no error. A project is a label
+only: nothing in this module reads it to decide access, and the Go server doesn't know about it.
+The logic is `groupByProject` in `web/src/grouping.ts`.
 
 **Every preview and console query runs read-only, as a viewer, whatever your role.** Each one
 gets a fresh lease of the workspace's read-only group, inside `BEGIN READ ONLY`, with these limits:

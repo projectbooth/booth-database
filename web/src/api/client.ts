@@ -1,4 +1,4 @@
-import type { ListedDatabase, QueryResult, StatusResponse, TablesResponse } from "../types";
+import type { ListedDatabase, Project, ProjectBinding, QueryResult, StatusResponse, TablesResponse } from "../types";
 
 // Mounted inside booth-design's shell, so requests resolve against the shell's origin and must go
 // through booth-core's gateway at /modules/{id}/*, which strips the prefix before forwarding to
@@ -28,12 +28,12 @@ export class ApiError extends Error {
 // X-Workspace is required by the gateway on every authenticated request (ADR 0025).
 // getAccessToken is called fresh before each request, never cached (ADR 0033); a null token omits
 // the header rather than sending "Bearer null".
-async function request<T>(ctx: ApiContext, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+async function request<T>(ctx: ApiContext, method: string, path: string, body?: unknown, signal?: AbortSignal, base = BASE): Promise<T> {
   const headers = new Headers({ "X-Workspace": ctx.workspace });
   const token = ctx.getAccessToken();
   if (token !== null) headers.set("Authorization", `Bearer ${token}`);
   if (body !== undefined) headers.set("Content-Type", "application/json");
-  const res = await fetch(BASE + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
+  const res = await fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal });
   if (!res.ok) {
     const text = await res.text();
     let message = text || `HTTP ${res.status}`;
@@ -69,3 +69,14 @@ export const runQuery = (ctx: ApiContext, sql: string) => request<QueryResult>(c
 
 /** Cancels the caller's running console query, if any. Resolves once the server has released it. */
 export const cancelQuery = (ctx: ApiContext) => request<void>(ctx, "DELETE", "/query");
+
+// booth-core's own routes (ADR 0124's project registry), on the shell's origin: no /modules/
+// prefix, the same token and X-Workspace header as every module request.
+const CORE = "";
+
+/** Every project in the workspace. A bare array (booth-core's handler). */
+export const listProjects = (ctx: ApiContext, signal?: AbortSignal) => request<Project[]>(ctx, "GET", "/api/projects", undefined, signal, CORE);
+
+/** Every postgres_schema binding in the workspace. */
+export const listSchemaBindings = (ctx: ApiContext, signal?: AbortSignal) =>
+  request<ProjectBinding[]>(ctx, "GET", "/api/projects/bindings?kind=postgres_schema", undefined, signal, CORE);

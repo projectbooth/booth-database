@@ -92,3 +92,33 @@ export interface QueryResult {
   commandTag: string;
   durationMs: number;
 }
+
+// ADR 0124: booth-core's project registry (contracts/projects.md). A project is a navigation
+// label only: nothing in this package uses it to decide what anyone may see or do.
+
+/** One project, from GET /api/projects. */
+export interface Project {
+  slug: string;
+  name: string;
+  /** The parent's slug. The contract says null for none; core sends "" today: both mean none. */
+  parent?: string | null;
+  description?: string;
+  color?: string;
+  icon?: string;
+  archived: boolean;
+  createdBy?: string;
+  createdAt?: string;
+}
+
+/** One binding, from GET /api/projects/bindings?kind=postgres_schema. */
+export interface ProjectBinding {
+  id: string;
+  /** The bound project's slug. */
+  project: string;
+  kind: string;
+  /** For postgres_schema: the schema's exact name. */
+  value: string;
+  backendId?: string;
+  createdBy?: string;
+  createdAt?: string;
+}
