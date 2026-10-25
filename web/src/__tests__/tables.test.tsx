@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prefillFor, quoteIdent } from "../ConsoleView";
 import { DatabaseApp } from "../DatabaseApp";
 import { formatApproxRows } from "../format";
-import { countLabel, groupByProject, groupBySchema } from "../grouping";
+import { countLabel, groupByProject, groupBySchema, isSystemSchema } from "../grouping";
 import { parseRoute, routePath, type Route } from "../navigation";
 import type { QueryResult, Relation, WorkspaceRole } from "../types";
 
@@ -181,6 +181,28 @@ describe("schema groups", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /^nfl_data/ }));
     expect(screen.getByRole("link", { name: "players" })).toBeInTheDocument();
+  });
+
+  it("treats the module's schema and PostgreSQL's own as system, and nothing else", () => {
+    for (const s of ["booth_database", "information_schema", "pg_catalog", "pg_toast", "pg_temp_3", "pg_toast_temp_12"]) expect(isSystemSchema(s)).toBe(true);
+    for (const s of ["public", "nfl_data", "pg_temp", "pg_temp_x", "pg_tempo_1", "postgis", "cron", "PG_CATALOG"]) expect(isSystemSchema(s)).toBe(false);
+    const order = groupBySchema([{ ...PLAYERS, schema: "pg_temp_3" }, { ...PLAYERS, schema: "zeta" }, { ...PLAYERS, schema: "information_schema" }, PLAYERS]);
+    expect(order.map((g) => [g.schema, g.system])).toEqual([
+      ["nfl_data", false],
+      ["zeta", false],
+      ["information_schema", true],
+      ["pg_temp_3", true],
+    ]);
+  });
+
+  it("opens a collapsed system schema on click", async () => {
+    at("/database/tables");
+    mockFetch(tablesReply([PLAYERS, { ...PLAYERS, schema: "pg_catalog", name: "pg_class", schemaHash: "h6" }]));
+    mount();
+    await screen.findByRole("link", { name: "players" });
+    expect(screen.queryByRole("link", { name: "pg_class" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /^pg_catalog/ }));
+    expect(screen.getByRole("link", { name: "pg_class" })).toBeInTheDocument();
   });
 
   it("has no project logic yet: one group, no project heading", () => {

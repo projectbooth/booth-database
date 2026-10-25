@@ -2,7 +2,7 @@ import { useId, useMemo, useState } from "react";
 import { listTables, previewTable, type ApiContext } from "./api/client";
 import { Alert, Link, Muted, Panel, ResultGrid, ResultSummary, tableEl, tableShell, tbody, td, th, thead, WritableBadge } from "./components";
 import { formatApproxRows, kindLabel } from "./format";
-import { countLabel, groupByProject, groupBySchema, SYSTEM_SCHEMAS, type SchemaGroup } from "./grouping";
+import { countLabel, groupByProject, groupBySchema, type SchemaGroup } from "./grouping";
 import { help } from "./help";
 import { useLoad, type LoadState } from "./hooks";
 import type { Relation, TablesResponse } from "./types";
@@ -58,11 +58,12 @@ function TablesBody({ state, q, onQuery }: { state: LoadState<TablesResponse>; q
     () => (state.status === "ready" ? groupByProject(groupBySchema(state.data.tables.filter((r) => matches(r, needle)))) : []),
     [state, needle],
   );
-  // Collapsed schemas, by name. System schemas start collapsed; a search shows every match
-  // whatever is collapsed, so filtering always works across all schemas.
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set(SYSTEM_SCHEMAS));
+  // Schemas the user has toggled from their default (system schemas start collapsed, the rest
+  // open). A search shows every match whatever is collapsed, so filtering always works across all
+  // schemas.
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set());
   const toggle = (schema: string) =>
-    setCollapsed((prev) => {
+    setToggled((prev) => {
       const next = new Set(prev);
       if (!next.delete(schema)) next.add(schema);
       return next;
@@ -86,7 +87,7 @@ function TablesBody({ state, q, onQuery }: { state: LoadState<TablesResponse>; q
         <div key={p.project ?? ""} className="flex flex-col gap-3">
           {/* ADR 0124: a project heading goes here once groupByProject returns projects. */}
           {p.schemas.map((g) => (
-            <SchemaSection key={g.schema} group={g} open={needle !== "" || !collapsed.has(g.schema)} onToggle={() => toggle(g.schema)} onQuery={onQuery} />
+            <SchemaSection key={g.schema} group={g} open={needle !== "" || g.system === toggled.has(g.schema)} onToggle={() => toggle(g.schema)} onQuery={onQuery} />
           ))}
         </div>
       ))}
